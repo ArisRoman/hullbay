@@ -302,7 +302,10 @@ describe("UpdaterService", () => {
       // Le placeholder est persisté corrigé (auto-réparation).
       expect(mockPrisma.systemInfo.update).toHaveBeenCalledWith({
         where: { id: "singleton" },
-        data: { currentVersion: "1.2.2" },
+        data: { 
+          currentVersion: "1.2.2",
+          updateChannel: "stable"
+        },
       })
     })
   })
