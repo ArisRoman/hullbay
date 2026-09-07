@@ -324,6 +324,22 @@ describe("expandPostgres HA (S4 §12-13)", () => {
     expect(member.config.env).not.toHaveProperty("POSTGRESQL_VERSION")
   })
 
+  it("override attendu en deploy (tag résolu dynamiquement) → membre utilise CE tag, pas le pin", () => {
+    // deploy passe ctx.patroniTagOverride (résolution registre au moment du deploy) :
+    // le membre doit le consommer tel quel (défaut de dérive registre vs pin).
+    const overridden: ExpansionContext = { ...ctx, patroniTagOverride: "v4.1.5-pg16" }
+    const exp = expandPostgres(cfg({ version: "16.3" }), overridden)
+    const member = byRole(exp, "member")[0]!
+    expect(member.config.tag).toBe("v4.1.5-pg16")
+    expect(member.config.image).toBe("ghcr.io/fotetsa/hullbay/patroni")
+  })
+
+  it("sans override (plan/preview) → pin PATRONI_VERSION conservé", () => {
+    const exp = expandPostgres(cfg({ version: "16.3" }), ctx)
+    const member = byRole(exp, "member")[0]!
+    expect(member.config.tag).toBe("v3.3.0-pg16")
+  })
+
   it("placement HA sans contrainte node.role==worker (déployable sur mono-nœud)", () => {
     const exp = expandPostgres(cfg({}), ctx)
     for (const m of containers(exp)) {

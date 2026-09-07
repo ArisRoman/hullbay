@@ -56,8 +56,92 @@ const PATRONI_IMAGE = { image: "ghcr.io/fotetsa/hullbay/patroni" }
 /**
  * Version de Patroni courante — injectée par la CI au build de l'API (même
  * valeur `version` qui tague `patroni:v<version>-pg<major>`), fallback dev.
+ * Utilisée comme PIN de secours quand la résolution du registre échoue.
  */
 const PATRONI_VERSION = process.env.PATRONI_VERSION ?? "3.3.0"
+/** Owner GHCR des images hullbay (github.repository normalisé en minuscules). */
+const GHCR_OWNER = process.env.GHCR_OWNER ?? "fotetsa"
+const PATRONI_GHCR_REPO = `${GHCR_OWNER}/hullbay/patroni`
+/** Durée du cache de résolution (le registre est interrogé au plus une fois par TTL). */
+const PATRONI_RESOLVE_TTL_MS = 15 * 60_000
+
+interface PatroniResolutionCache {
+  pgMajor: string
+  version: string
+  resolvedAt: number
+}
+
+let patroniResolveCache: PatroniResolutionCache | undefined
+
+/**
+ * Résout dynamiquement la version Patroni réellement publiée sur GHCR pour une
+ * majeure PG donnée — la CI publie les tags patroni indépendamment du pin de
+ * l'API, un pin statique peut donc diverger de ce qui existe (404 au pull).
+ * Retourne le tag complet `v<version>-pg<major>`.
+ *
+ * Politique :
+ *  - le registre est interrogé d'abord (source de vérité : ce qui est publié) ;
+ *  - chaque résolution est mise en cache (TTL 15 min) par majeure PG ;
+ *  - en cas d'échec réseau/registre, repli sur le pin `PATRONI_VERSION` (le
+ *    comportement historique reste atteignable, jamais de 500 inattendu).
+ *
+ * Actif uniquement pour la topologie HA (le single utilise l'image officielle
+ * `postgres:<version>`, pas l'image Patroni custom).
+ */
+export async function resolveLatestPatroniTag(
+  pgMajor: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  if (
+    patroniResolveCache &&
+    patroniResolveCache.pgMajor === pgMajor &&
+    Date.now() - patroniResolveCache.resolvedAt < PATRONI_RESOLVE_TTL_MS
+  ) {
+    return `v${patroniResolveCache.version}-pg${pgMajor}`
+  }
+
+  try {
+    const scope = `repository:${PATRONI_GHCR_REPO}:pull`
+    const tokRes = await fetchImpl(
+      `https://ghcr.io/token?service=ghcr.io&scope=${encodeURIComponent(scope)}`,
+    )
+    if (!tokRes.ok) throw new Error(`token GHCR HTTP ${tokRes.status}`)
+    const { token } = (await tokRes.json()) as { token: string }
+    const res = await fetchImpl(`https://ghcr.io/v2/${PATRONI_GHCR_REPO}/tags/list`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`tags GHCR HTTP ${res.status}`)
+    const { tags } = (await res.json()) as { tags?: string[] }
+
+    const prefix = new RegExp(`^v(\\d+\\.\\d+\\.\\d+)-pg${pgMajor}$`)
+    const versions = (tags ?? [])
+      .map((t) => prefix.exec(t)?.[1])
+      .filter((v): v is string => Boolean(v))
+      .sort((a, b) => {
+        const pa = a.split(".").map(Number)
+        const pb = b.split(".").map(Number)
+        return (
+          (pb[0] ?? 0) - (pa[0] ?? 0) ||
+          (pb[1] ?? 0) - (pa[1] ?? 0) ||
+          (pb[2] ?? 0) - (pa[2] ?? 0)
+        )
+      })
+
+    const latest = versions[0]
+    if (!latest) throw new Error(`aucun tag vX.Y.Z-pg${pgMajor} publié sur GHCR`)
+    patroniResolveCache = { pgMajor, version: latest, resolvedAt: Date.now() }
+    return `v${latest}-pg${pgMajor}`
+  } catch {
+    // Registre indisponible/illisible : la résolution ne doit jamais bloquer un
+    // déploiement — repli sur le pin (comportement historique pré-résolution).
+    return `v${PATRONI_VERSION}-pg${pgMajor}`
+  }
+}
+
+/** Réinitialise le cache de résolution (tests). */
+export function __resetPatroniResolveCache(): void {
+  patroniResolveCache = undefined
+}
 const ETCD_IMAGE = { image: "quay.io/coreos/etcd", tag: "v3.5.16" }
 const HAPROXY_IMAGE = { image: "haproxy", tag: "2.9-alpine" }
 
@@ -329,9 +413,10 @@ function patroniMember(
   // sur la minor buildée au moment du build CI — trade-off assumé (PLAN_PATRONI_CUSTOM).
   const pgMajor = config.version.replace(/^(\d+).*$/, "$1")
   // Préfixe `v` reconstruit : cohérent avec la convention ghcr (les images sont
-  // publiées sous leur tag GitHub brut `v3.3.0-pg17`). La version est celle de
-  // PATRONI (pas de la release hullbay) — injectée par le workflow dédié.
-  const patroniTag = `v${PATRONI_VERSION}-pg${pgMajor}`
+  // publiées sous leur tag GitHub brut `v3.3.0-pg17`). Le tag est soit résolu
+  // dynamiquement au déploiement (registre GHCR, cf. resolveLatestPatroniTag),
+  // soit épinglé sur `PATRONI_VERSION` — injectée par le workflow dédié.
+  const patroniTag = ctx.patroniTagOverride ?? `v${PATRONI_VERSION}-pg${pgMajor}`
   return {
     kind: "container",
     nodeId: `db::${ctx.parentNodeId}::member::${index}`,
