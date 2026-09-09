@@ -1,127 +1,126 @@
-import { DockerEngineService } from "../modules/docker-engine/service"
-import { prisma } from "../lib/prisma"
-import { eventBus } from "../lib/event-bus"
-import { runWithConcurrency, CLUSTER_CONCURRENCY } from "../lib/concurrency"
+import { clusterService } from "../modules/clusters/service";
+import { DockerEngineService } from "../modules/docker-engine/service";
 
 /**
- * Health-check périodique des clusters.
+ * Ce job comble un manque connu de Swarm et de notre propre modèle de
+ * données. Un cluster passe à l'état prêt une seule fois, au moment où son
+ * tout premier manager termine son provisionnement, et rien ne réévaluait
+ * plus jamais cet état ensuite. Un cluster pouvait donc rester marqué prêt
+ * en base alors que sa machine était éteinte depuis des heures, ce qui
+ * laissait l'utilisateur découvrir le problème seulement au moment d'un
+ * déploiement raté, au lieu d'être prévenu à l'avance.
  *
- * Le statut d'un cluster n'était évalué qu'au provisioning (markReady/markFailed,
- * une seule fois). Si un Swarm tombe ensuite (perte de quorum, manager down, socket
- * mort), aucun job ne le détectait → la route deploy pouvait lancer des workflows
- * voués à l'échec. Ce job réévalue régulièrement chaque cluster "ready" : un Swarm
- * inactif ou un quorum perdu comptent comme "dégradé". Après un nombre consécutif
- * d'observations dégradées (DEGRADE_THRESHOLD), le cluster repasse en "failed" et
- * la garde deploy (routes.ts) refuse les nouveaux déploiements jusqu'à récupération.
- * Le seuil évite de rétrograder un cluster sain sur une simple erreur transitoire.
+ * Le job vérifie, à intervalle régulier, que chaque cluster marqué prêt
+ * répond toujours et garde un quorum sain. On tolère plusieurs échecs
+ * consécutifs avant d'agir, pour ne pas basculer un cluster parfaitement
+ * valide en échec à cause d'un simple accroc réseau passager.
+ *
+ * Le job gère aussi le sens inverse. Un cluster marqué défaillant, mais qui
+ * avait déjà été opérationnel par le passé et possède donc une vraie
+ * adresse de connexion, peut redevenir prêt tout seul s'il répond de
+ * nouveau de façon stable. On ne tente jamais cette remise en service pour
+ * un cluster qui a échoué dès son tout premier provisionnement, celui-là
+ * n'a jamais eu d'adresse de connexion valide, il n'y a donc rien de réel à
+ * réessayer de joindre, sa seule sortie possible est un nouveau
+ * provisionnement manuel. La remise en service exige, comme le passage en
+ * échec, plusieurs vérifications positives consécutives avant d'agir. Et
+ * dans les deux sens, l'écriture en base est conditionnelle, elle ne
+ * change réellement le statut que s'il correspond encore exactement à ce
+ * qu'on vient d'observer, ce qui évite de venir contredire une action que
+ * l'utilisateur aurait lancée entre-temps, comme la suppression de ce même
+ * cluster.
  */
 
-const HEALTH_INTERVAL_MS = Number(process.env.CLUSTER_HEALTH_INTERVAL_MS || 30_000)
+const CHECK_INTERVAL_MS =
+  Number(process.env.CLUSTER_HEALTH_INTERVAL_MS) || 60_000;
+const FAILURE_THRESHOLD =
+  Number(process.env.CLUSTER_HEALTH_FAILURE_THRESHOLD) || 3;
+const RECOVERY_THRESHOLD =
+  Number(process.env.CLUSTER_HEALTH_RECOVERY_THRESHOLD) || 3;
+
+const consecutiveFailures = new Map<string, number>();
+const consecutiveRecoveries = new Map<string, number>();
+
+export function resetHealthCountersForTests(): void {
+  consecutiveFailures.clear();
+  consecutiveRecoveries.clear();
+}
+
+async function isClusterHealthy(clusterId: string): Promise<boolean> {
+  try {
+    const engine = await DockerEngineService.forCluster(clusterId);
+    if (!(await engine.isSwarmActive())) return false;
+    const managers = await engine.managerHealth();
+    return managers.quorumOk;
+  } catch {
+    return false;
+  }
+}
 
 /**
- * Nombre de ticks CONSÉCUTIFS où un cluster est vu dégradé (swarm inactif ou
- * quorum perdu) avant de le passer en "failed". Un seul échec peut être une
- * erreur réseau transitoire sur le tunnel/socket (isSwarmActive renvoie false
- * sur toute erreur) : on exige plusieurs observations avant de rétrograder,
- * pour ne pas frapper un cluster sain d'une fausse panne irréversible.
+ * Un passage complet sur tous les clusters, exporté séparément pour pouvoir être testé sans dépendre du minuteur.
  */
-const DEGRADE_THRESHOLD = Number(process.env.CLUSTER_HEALTH_DEGRADED_THRESHOLD || 3)
+export async function runClusterHealthCheck(): Promise<void> {
+  const clusters = await clusterService.list();
 
-// clusterId -> compteur d'échelons consécutifs.
-const consecutiveDegraded = new Map<string, number>()
+  for (const cluster of clusters) {
+    const wasReady = cluster.status === "ready";
+    const canAttemptRecovery =
+      cluster.status === "failed" && Boolean(cluster.dockerHost);
 
-// Garde anti-réentrance : un tick ne doit pas chevaucher le précédent.
-let running = false
-
-/** Remet un cluster "ready" en "failed" avec un événement d'audit cohérent.
- *  Retourne `true` si la rétrogradation a eu lieu, `false` si le cluster
- *  n'était plus "ready" (déjà rétrogradé/supprimé entre-temps). */
-async function downgradeCluster(clusterId: string, reason: string): Promise<boolean> {
-  try {
-    await prisma.cluster.update({
-      where: { id: clusterId, status: "ready" },
-      data: { status: "failed" },
-    })
-  } catch {
-    return false
-  }
-  await eventBus
-    .emit("cluster.status", {
-      clusterId,
-      from: "ready",
-      to: "failed",
-      reason,
-      timestamp: new Date().toISOString(),
-    })
-    .catch(() => {})
-  return true
-}
-
-/** Un tick de santé sur tous les clusters prêts. */
-export async function runClusterHealth(): Promise<void> {
-  if (running) return
-  running = true
-  try {
-    const clusters = await prisma.cluster.findMany({
-      where: { status: "ready" },
-      select: { id: true },
-    })
-    const { items } = await runWithConcurrency(
-      clusters.map((c) => c.id),
-      CLUSTER_CONCURRENCY,
-      (clusterId) => clusterHealthForCluster(clusterId),
-    )
-    for (const it of items) {
-      if (it.status === "rejected") {
-        // un cluster injoignable ne doit pas bloquer le tick des autres.
-        console.warn(
-          `[cluster-health] cluster ${clusters[it.index]!.id} injoignable: ${String(it.reason)}`,
-        )
-      }
+    // Un cluster en attente, en cours de suppression, ou en échec sans
+    // jamais avoir eu d'adresse de connexion valide, ne nous concerne pas
+    // ici. On efface aussi tout reliquat de compteur le concernant, pour ne
+    // pas garder en mémoire l'historique d'un cluster qui n'a plus de sens
+    // à surveiller dans cet état.
+    if (!wasReady && !canAttemptRecovery) {
+      consecutiveFailures.delete(cluster.id);
+      consecutiveRecoveries.delete(cluster.id);
+      continue;
     }
-  } finally {
-    running = false
+
+    const healthy = await isClusterHealthy(cluster.id);
+
+    if (wasReady) {
+      if (healthy) {
+        consecutiveFailures.delete(cluster.id);
+        continue;
+      }
+      const failures = (consecutiveFailures.get(cluster.id) ?? 0) + 1;
+      consecutiveFailures.set(cluster.id, failures);
+      if (failures >= FAILURE_THRESHOLD) {
+        const changed = await clusterService.markUnhealthy(cluster.id);
+        if (changed) {
+          console.warn(
+            `Le cluster ${cluster.name} (${cluster.id}) est injoignable depuis ${failures} vérifications consécutives, il passe en échec.`,
+          );
+        }
+        consecutiveFailures.delete(cluster.id);
+      }
+      continue;
+    }
+
+    // À partir d'ici, on est dans le cas d'une tentative de remise en service.
+    if (!healthy) {
+      consecutiveRecoveries.delete(cluster.id);
+      continue;
+    }
+    const recoveries = (consecutiveRecoveries.get(cluster.id) ?? 0) + 1;
+    consecutiveRecoveries.set(cluster.id, recoveries);
+    if (recoveries >= RECOVERY_THRESHOLD) {
+      const changed = await clusterService.markRecovered(cluster.id);
+      if (changed) {
+        console.info(
+          `Le cluster ${cluster.name} (${cluster.id}) répond de nouveau depuis ${recoveries} vérifications consécutives, il repasse en service.`,
+        );
+      }
+      consecutiveRecoveries.delete(cluster.id);
+    }
   }
 }
 
-async function clusterHealthForCluster(clusterId: string): Promise<void> {
-  const engine = await DockerEngineService.forCluster(clusterId)
-  const degraded = await isDegraded(engine)
-  if (!degraded) {
-    // Sain : reset le compteur d'échelons consécutifs.
-    consecutiveDegraded.delete(clusterId)
-    return
-  }
-  const tries = (consecutiveDegraded.get(clusterId) ?? 0) + 1
-  if (tries < DEGRADE_THRESHOLD) {
-    console.warn(
-      `[cluster-health] cluster ${clusterId} dégradé ${tries}/${DEGRADE_THRESHOLD} — pas encore rétrogradé`,
-    )
-    consecutiveDegraded.set(clusterId, tries)
-    return
-  }
-  console.warn(
-    `[cluster-health] cluster ${clusterId} dégradé ${tries} ticks consécutifs → failed`,
-  )
-  consecutiveDegraded.delete(clusterId)
-  const ok = await downgradeCluster(clusterId, "degraded")
-  if (!ok) {
-    console.warn(
-      `[cluster-health] cluster ${clusterId} déjà rétrogradé entre-temps, event ignoré`,
-    )
-  }
-}
-
-/** true si le cluster est dégradé (swarm inactif ou quorum perdu). */
-async function isDegraded(engine: DockerEngineService): Promise<boolean> {
-  if (!(await engine.isSwarmActive())) return true
-  const health = await engine.managerHealth()
-  return !health.quorumOk
-}
-
-/** Démarre la boucle périodique de santé des clusters. */
 export function startClusterHealthJob(): NodeJS.Timeout {
   return setInterval(() => {
-    void runClusterHealth()
-  }, HEALTH_INTERVAL_MS)
+    void runClusterHealthCheck();
+  }, CHECK_INTERVAL_MS);
 }
