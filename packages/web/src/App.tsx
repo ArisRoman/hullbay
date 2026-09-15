@@ -21,7 +21,6 @@ import { SecretsPage } from "./pages/SecretsPage"
 import { UpdatesPage } from "./pages/UpdatesPage"
 import { ClusterDetailPage } from "./pages/ClusterDetailPage";
 import { ClustersPage } from "./pages/ClustersPage";
-import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 /**
  * Routing par URL (react-router) :
  *  - non authentifié -> /login (toutes les autres routes y redirigent)
@@ -43,7 +42,6 @@ export function App() {
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="/setup-domain" element={<SetupDomainPage />} />
           <Route path="/activate-mfa" element={<ActivateMfaPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/canvas/:projectId" element={<CanvasPage />} />
 
           <Route element={<AppLayout onLogout={() => setAuthed(false)} />}>
@@ -216,11 +214,8 @@ function UnauthedGate({
     return <BootstrapPage onAuthed={onAuthed} />
   }
 
-  if (pathname !== "/login" && pathname !== "/reset-password") {
+  if (pathname !== "/login") {
     return <Navigate to="/login" replace state={{ from: pathname }} />
-  }
-  if (pathname === "/reset-password") {
-    return <ResetPasswordPage />
   }
 
   return <LoginPage onAuthed={onAuthed} />

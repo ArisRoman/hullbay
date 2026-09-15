@@ -1,10 +1,12 @@
 import { email } from "zod/v4";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
 import { authService } from "./service";
 import { prisma } from "../../lib/prisma";
 import { requireRole, currentUser } from "./rbac";
 import { eventBus } from "../../lib/event-bus";
+import { authRateLimiter } from "./rate-limit";
 
 /**
  * Routes d'authentification - validation automatique via fastify-type-provider-zod
@@ -53,6 +55,18 @@ function serializeError(err: unknown, fallbackStatus = 400) {
   }
 }
 
+// Réponse de blocage uniforme (anti-énumération) : même corps et même header
+// `Retry-After`, qu'un compte existe ou non — jamais de distinction exploitable.
+function rateLimited(reply: FastifyReply, retryAfterSec: number) {
+  return reply
+    .code(429)
+    .header("retry-after", String(retryAfterSec))
+    .send({
+      error: "trop de tentatives, réessayez dans quelques secondes",
+      code: "rate_limited",
+    })
+}
+
 export function registerAuthGuard(app: FastifyInstance) {
   app.addHook("onRequest", async (req, reply) => {
     if (!req.url.startsWith("/api/")) return;
@@ -94,11 +108,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
+      const body = req.body as { email: string; password: string };
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/bootstrap");
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
       try {
-        const body = req.body as { email: string; password: string };
         const user = await authService.createOwner(body.email, body.password);
+        authRateLimiter.reset(key);
         return { ok: true, id: user.id };
       } catch (err) {
+        authRateLimiter.recordFailure(key);
         const { status, payload } = serializeError(err, 409)
         return reply.code(status).send(payload)
       }
@@ -114,7 +133,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         tags: ["auth"],
       },
     },
-    async () => {
+    async (req, reply) => {
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/needs-bootstrap");
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
       return { needsBootstrap: (await authService.countUsers()) === 0 };
     },
   );
@@ -129,10 +151,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
+      const body = req.body as { email: string; password: string };
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/login", body.email);
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
       try {
-        const body = req.body as { email: string; password: string };
-        return await authService.login(body.email, body.password);
+        const result = await authService.login(body.email, body.password);
+        authRateLimiter.reset(key);
+        return result;
       } catch (err) {
+        authRateLimiter.recordFailure(key);
         const { status, payload } = serializeError(err, 401)
         return reply.code(status).send(payload)
       }
@@ -154,10 +182,25 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
+      const body = req.body as { pendingToken: string; code: string };
+      // Dimension "compte" : on résout l'identité depuis le pendingToken (JWT) ;
+      // en cas de token illisible, on rate-limite sur le token lui-même.
+      let account = body.pendingToken;
       try {
-        const body = req.body as { pendingToken: string; code: string };
-        return await authService.verifyMfa(body.pendingToken, body.code);
+        const decoded = jwt.decode(body.pendingToken) as { sub?: string } | null;
+        if (decoded?.sub) account = decoded.sub;
+      } catch {
+        // token inexploitable : fallback ci-dessus
+      }
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/verify", account);
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
+      try {
+        const result = await authService.verifyMfa(body.pendingToken, body.code);
+        authRateLimiter.reset(key);
+        return result;
       } catch (err) {
+        authRateLimiter.recordFailure(key);
         const { status, payload } = serializeError(err, 401)
         return reply.code(status).send(payload)
       }
@@ -190,10 +233,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const user = (req as FastifyRequest & { user: { sub: string } }).user;
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/confirm", user.sub);
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
       try {
         const body = req.body as { code: string };
-        return await authService.confirmMfaEnrollment(user.sub, body.code);
+        const result = await authService.confirmMfaEnrollment(user.sub, body.code);
+        authRateLimiter.reset(key);
+        return result;
       } catch (err) {
+        authRateLimiter.recordFailure(key);
         const { status, payload } = serializeError(err, 400)
         return reply.code(status).send(payload)
       }
@@ -231,18 +280,24 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const user = (req as FastifyRequest & { user: { sub: string } }).user;
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/password", user.sub);
+      const before = authRateLimiter.check(key);
+      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1);
       try {
         const body = req.body as {
           currentPassword: string;
           newPassword: string;
         };
-        return await authService.changePassword(
+        const result = await authService.changePassword(
           user.sub,
           body.currentPassword,
           body.newPassword,
         );
+        authRateLimiter.reset(key);
+        return result;
       } catch (err) {
         // Mot de passe actuel incorrect = erreur attendue → 400 message clair.
+        authRateLimiter.recordFailure(key);
         const { status, payload } = serializeError(err, 400)
         return reply.code(status).send(payload)
       }

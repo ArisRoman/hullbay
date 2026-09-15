@@ -24,6 +24,11 @@ const AUDITED: Record<string, string> = {
   "prune.finished": "prune.finished",
   "secret.set": "secret.set",
   "secret.removed": "secret.removed",
+  "auth.login.success": "auth.login.success",
+  "auth.login.failed": "auth.login.failed",
+  "auth.mfa.success": "auth.mfa.success",
+  "auth.mfa.failed": "auth.mfa.failed",
+  "auth.password.changed": "auth.password.changed",
 }
 
 export function registerDeploySubscribers(): void {

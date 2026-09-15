@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { api, auth } from "../lib/api"
+import { api, auth, type ApiError } from "../lib/api"
 import {
   Button,
   Heading,
@@ -21,6 +21,30 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
   const [loading, setLoading] = useState(false)
   const [code, setCode] = useState("")
 
+  // Verrouillage temporaire après abus de tentatives (429 du back).
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null)
+  const [nowTick, setNowTick] = useState(() => Date.now())
+
+  const remainingSec =
+    lockedUntil !== null ? Math.max(0, Math.ceil((lockedUntil - nowTick) / 1000)) : 0
+
+  useEffect(() => {
+    if (lockedUntil === null) return
+    const id = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [lockedUntil])
+
+  useEffect(() => {
+    if (lockedUntil !== null && Date.now() >= lockedUntil) {
+      setLockedUntil(null)
+      toast.info(t("auth.rateLimited.unlocked"))
+    }
+  }, [nowTick, lockedUntil, t])
+
+  function lock(err: ApiError) {
+    setLockedUntil(Date.now() + (err.retryAfterSec ?? 30) * 1000)
+  }
+
   async function submitCredentials() {
     setLoading(true)
 
@@ -38,11 +62,16 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
         navigate("/", { replace: true })
       }
     } catch (e) {
-      const err = e as Error & { code?: string }
+      const err = e as ApiError
+
+      if (err.status === 429) {
+        lock(err)
+        return
+      }
 
       if (err.code === "invalid_credentials") {
         toast.error(t("auth.toast.loginFailed"), {
-          description: "Email ou mot de passe incorrect.",
+          description: t("auth.toast.invalidCredentialsDescription"),
         })
       } else {
         toast.error(t("auth.toast.loginFailed"), {
@@ -66,14 +95,19 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
       onAuthed()
       navigate("/", { replace: true })
     } catch (e) {
-      const err = e as Error & { code?: string }
+      const err = e as ApiError
+
+      if (err.status === 429) {
+        lock(err)
+        return
+      }
 
       if (
         err.code === "mfa_code_invalid" ||
         err.code === "mfa_token_invalid"
       ) {
         toast.error(t("auth.toast.invalidCode"), {
-          description: "Le code MFA est incorrect ou expiré.",
+          description: t("auth.toast.invalidMfaDescription"),
         })
       } else {
         toast.error(t("auth.toast.invalidCode"), {
@@ -84,6 +118,9 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
       setLoading(false)
     }
   }
+
+  const lockVisible = remainingSec > 0;
+  const disabled = loading || lockVisible;
 
   return (
   <div className="flex min-h-full w-full items-center justify-center bg-ui-bg-subtle px-4 py-8">
@@ -110,6 +147,21 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
         </Text>
       </div>
 
+      {lockVisible && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-5 rounded-xl border border-ui-border-error bg-ui-bg-error px-4 py-3"
+        >
+          <Text className="text-sm font-medium leading-5 text-ui-fg-error">
+            {t("auth.rateLimited.title")}
+          </Text>
+          <Text className="mt-0.5 text-sm leading-5 text-ui-fg-error">
+            {t("auth.rateLimited.retryIn", { seconds: remainingSec })}
+          </Text>
+        </div>
+      )}
+
       {!pendingToken ? (
         <div className="flex flex-col gap-4">
 
@@ -127,7 +179,8 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder={t("auth.login.placeholder")}
-              className="h-10 rounded-lg"
+              disabled={disabled}
+              className="h-10 rounded-lg disabled:opacity-50"
             />
           </div>
 
@@ -144,7 +197,8 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="h-10 rounded-lg"
+              disabled={disabled}
+              className="h-10 rounded-lg disabled:opacity-50"
             />
           </div>
 
@@ -152,32 +206,13 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
           <Button
             onClick={submitCredentials}
             isLoading={loading}
-            className="mt-1 h-10 w-full rounded-lg"
+            disabled={disabled}
+            className="mt-1 h-10 w-full rounded-lg disabled:opacity-50"
           >
             {t("auth.login.submitButton")}
           </Button>
 
-          {/* Secondary actions */}
-          <div className="mt-2 flex flex-col items-center gap-2 text-sm">
-            <div className="text-ui-fg-subtle">
-              <span>Mot de passe oublié ? </span>
-              <span
-                className="cursor-pointer text-ui-fg-interactive"
-                onClick={() => navigate("/reset-password")}>
-                Initialiser le mot de passe
-              </span>
-            </div>
-
-            <div className="text-ui-fg-subtle">
-              <span>Pas encore de compte ? </span>
-              <span
-                className="cursor-pointer text-ui-fg-interactive"
-                onClick={() => alert("La creation de compte est actuellementdesactivee.")}>
-                Créer un compte
-              </span>
-            </div>
           </div>
-        </div>
       ) : (
         <div className="flex flex-col gap-4">
 
@@ -187,7 +222,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
               size="small"
               className="mb-1.5 block text-ui-fg-subtle"
             >
-              Code de vérification
+              {t("auth.mfa.codeLabel")}
             </Label>
 
             <Input
@@ -195,14 +230,16 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
               onChange={(e) => setCode(e.target.value)}
               placeholder={t("auth.mfa.codePlaceholder")}
               inputMode="numeric"
-              className="h-10 rounded-lg text-center tracking-[0.25em]"
+              disabled={disabled}
+              className="h-10 rounded-lg text-center tracking-[0.25em] disabled:opacity-50"
             />
           </div>
 
           <Button
             onClick={submitMfa}
             isLoading={loading}
-            className="h-10 w-full rounded-lg"
+            disabled={disabled}
+            className="h-10 w-full rounded-lg disabled:opacity-50"
           >
             {t("auth.mfa.submitButton")}
           </Button>

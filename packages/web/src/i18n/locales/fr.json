@@ -11,7 +11,7 @@
   },
   "bootstrap": {
     "title": "Bienvenue sur hullbay",
-    "description": "Aucun compte n'existe encore. Crée le compte administrateur (owner) qui pilotera l'infrastructure. Tu pourras ensuite déléguer un accès limité à un employé et activer la double authentification.",
+    "description": "Aucun compte n'existe encore. Créez le compte administrateur (owner) qui pilotera l'infrastructure. Vous pourrez ensuite déléguer un accès limité à un employé et activer la double authentification.",
     "emailLabel": "Email",
     "emailPlaceholder": "owner@bozando.com",
     "passwordLabel": "Mot de passe",
@@ -22,7 +22,7 @@
     "submitButton": "Créer le compte administrateur",
     "toast": {
       "accountCreated": "Compte créé",
-      "pleaseLogin": "Connecte-toi.",
+      "pleaseLogin": "Connectez-vous.",
       "creationFailed": "Création impossible"
     }
   },
@@ -36,23 +36,36 @@
       "submitButton": "Se connecter"
     },
     "mfa": {
-      "instruction": "Saisis le code de ton application d'authentification.",
+      "instruction": "Saisissez le code de votre application d'authentification.",
       "codePlaceholder": "123456",
+      "codeLabel": "Code de vérification",
       "submitButton": "Valider"
     },
     "toast": {
       "loginFailed": "Connexion échouée",
+      "invalidCredentialsDescription": "E-mail ou mot de passe incorrect.",
       "mfaEnrollFailed": "Impossible de démarrer l'activation MFA",
-      "invalidCode": "Code invalide"
+      "mfaNotEnabledDescription": "Activez d'abord la MFA avant de poursuivre.",
+      "mfaEnabled": "MFA activée",
+      "invalidCode": "Code invalide",
+      "invalidMfaDescription": "Le code MFA est incorrect ou expiré."
+    },
+    "rateLimited": {
+      "title": "Trop de tentatives",
+      "retryIn": "Réessayez dans {{seconds}} s.",
+      "unlocked": "Nouvelle tentative possible"
     },
     "mfaModal": {
-      "title": "Active la MFA",
-      "description": "Pour sécuriser ton compte, active la double authentification. Scanne ce QR code avec ton application d'authentification (Google Authenticator, Authy, etc.) puis saisis le code.",
+      "title": "Activer la double authentification",
+      "description": "Pour sécuriser votre compte, activez la double authentification. Scannez ce QR code avec votre application d'authentification (Google Authenticator, Authy, etc.) puis saisissez le code.",
       "preparing": "Préparation en cours...",
-      "manualEntryLabel": "Saisie manuelle (à copier)",
-      "manualEntryHint": "Copie ce secret dans ton application si tu ne peux pas scanner.",
+      "scanQrTitle": "Scannez le QR code",
+      "scanAppsHint": "Utilisez Google Authenticator, Authy ou une application compatible avec la validation en deux étapes.",
+      "manualEntryLabel": "Configuration manuelle",
+      "manualEntryHint": "Si vous ne pouvez pas scanner le QR code, copiez ce secret dans votre application.",
       "copy": "Copier",
       "copied": "Copié",
+      "codeHint": "Saisissez le code à 6 chiffres affiché dans votre application.",
       "verificationCodeLabel": "Code de vérification",
       "confirmButton": "Confirmer l'activation"
     }

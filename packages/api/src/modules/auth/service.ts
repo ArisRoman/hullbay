@@ -2,7 +2,9 @@ import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto"
 import jwt from "jsonwebtoken"
 import { generateSecret, generateURI, verify as totpVerify } from "otplib"
 import { prisma } from "../../lib/prisma"
+import { eventBus } from "../../lib/event-bus"
 import { encryptSecret, decryptSecret } from "./crypto"
+import { AUTH_AUDIT_EVENTS, type AuthAuditEvent } from "./audit-events"
 import type { Role } from "./rbac"
 
 export type AuthErrorCode =
@@ -56,7 +58,20 @@ function verifyPassword(password: string, stored: string): boolean {
   return derived.length === expected.length && timingSafeEqual(derived, expected)
 }
 
+// Hash factice vérifié quand l'email n'existe pas : coût de hachage identique au
+// chemin "compte existant", pour ne pas révéler l'existence d'un compte par timing.
+const DUMMY_HASH = hashPassword("dummy-password-for-timing")
+
 export class AuthService {
+  /** Diffuse un event d'audit (fire-and-forget ; échec jamais propagé). */
+  private trace(event: AuthAuditEvent, data: Record<string, unknown>): void {
+    void eventBus.emit(event, data).catch((err) => {
+      if (process.env.NODE_ENV !== "test") {
+        console.warn(`[auth] event ${event} non diffusé : ${err}`)
+      }
+    })
+  }
+
   /** Crée le compte owner initial (idempotent : refuse si un owner existe déjà). */
   async createOwner(email: string, password: string) {
     const existing = await prisma.user.findFirst({ where: { role: "owner" } })
@@ -72,9 +87,16 @@ export class AuthService {
    */
   async login(email: string, password: string) {
     const user = await prisma.user.findUnique({ where: { email } })
-    if (!user || !verifyPassword(password, user.passwordHash)) {
+    // Hachage systématique (compte inexistant : dummy hash) pour égaliser le
+    // coût et ne pas révéler l'existence du compte par le temps de réponse.
+    const valid = user
+      ? verifyPassword(password, user.passwordHash)
+      : verifyPassword(password, DUMMY_HASH)
+    if (!user || !valid) {
+      this.trace(AUTH_AUDIT_EVENTS.loginFailed, { email })
       throw new AuthError("invalid_credentials", "identifiants invalides", 401)
     }
+    this.trace(AUTH_AUDIT_EVENTS.loginSuccess, { userId: user.id, email: user.email })
     if (user.mfaEnabled) {
       // Token court de "pré-auth" : audience dédiée mfa-pending, JAMAIS acceptée
       // comme session par verifyToken (cf. revue sécu : sinon MFA contournable).
@@ -92,11 +114,13 @@ export class AuthService {
   async verifyMfa(pendingToken: string, code: string) {
     // Exige l'audience mfa-pending : un token de session ne peut pas servir ici,
     // et inversement (les deux audiences sont cloisonnées).
-    const decoded = jwt.verify(pendingToken, process.env.JWT_SECRET as string, {
-      audience: AUD_MFA_PENDING,
-    }) as {
-      sub?: string
-      mfa?: string
+    let decoded: { sub?: string; mfa?: string }
+    try {
+      decoded = jwt.verify(pendingToken, process.env.JWT_SECRET as string, {
+        audience: AUD_MFA_PENDING,
+      }) as { sub?: string; mfa?: string }
+    } catch {
+      throw new AuthError("mfa_token_invalid", "token MFA invalide", 401)
     }
     if (decoded.mfa !== "pending" || !decoded.sub) {
       throw new AuthError("mfa_token_invalid", "token MFA invalide", 401)
@@ -107,8 +131,10 @@ export class AuthService {
     }
     const secret = decryptSecret(user.mfaSecretEnc)
     if (!(await totpVerify({ token: code, secret, epochTolerance: 30 })).valid) {
+      this.trace(AUTH_AUDIT_EVENTS.mfaFailed, { userId: user.id })
       throw new AuthError("mfa_code_invalid", "code invalide", 401)
     }
+    this.trace(AUTH_AUDIT_EVENTS.mfaSuccess, { userId: user.id })
     return { token: this.issueToken(user.id, user.role, true) }
   }
 
@@ -158,6 +184,7 @@ export class AuthService {
       where: { id: userId },
       data: { passwordHash: hashPassword(newPassword) },
     })
+    this.trace(AUTH_AUDIT_EVENTS.passwordChanged, { userId })
     return { ok: true }
   }
 

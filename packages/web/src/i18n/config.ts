@@ -10,13 +10,13 @@ const resources = {
   en: { translation: en }
 };
 
-// Configuration du détecteur de langue avec priorité : localStorage > navigateur
+// Français = langue par défaut du produit. Seule une préférence stockée
+// (localStorage "user-language") bascule en anglais ; le navigateur n'est
+// plus détecté (un OS en anglais ne doit pas imposer la langue de l'UI).
 const detectionOptions = {
-  order: ['localStorage', 'navigator'],
+  order: ['localStorage'],
   lookupLocalStorage: 'user-language',
   caches: ['localStorage'],
-  // Ne détecter que les langues supportées
-  checkWhitelist: true
 };
 
 i18n
@@ -24,11 +24,12 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
-    fallbackLng: 'en',
-    supportedLngs: ['en', 'fr'],
+    lng: 'fr',
+    fallbackLng: 'fr',
+    supportedLngs: ['fr', 'en'],
     detection: detectionOptions,
     interpolation: {
-      escapeValue: false, 
+      escapeValue: false,
     }
   });
 

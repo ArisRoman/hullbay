@@ -33,6 +33,8 @@ export type ApiError = Error & {
   status?: number
   code?: string
   details?: unknown
+  /** Secondes avant une nouvelle tentative possible (réponse 429). */
+  retryAfterSec?: number
 }
 
 function createApiError(message: string, status: number, code?: string, details?: unknown): ApiError {
@@ -89,6 +91,12 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
         ? (body as any).code
         : undefined
     const error = createApiError(message, res.status, code, body)
+
+    // 429 = rate limit : le back indique le délai avant réessai (Retry-After).
+    if (res.status === 429) {
+      const retry = Number(res.headers.get("retry-after"));
+      if (Number.isFinite(retry) && retry > 0) error.retryAfterSec = retry;
+    }
 
     // 401 avec un token présent = session expirée/invalide. On purge le token et on
     // renvoie au login (sinon React Query boucle indéfiniment sur des 401). On exclut

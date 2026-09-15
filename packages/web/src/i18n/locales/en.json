@@ -38,21 +38,34 @@
     "mfa": {
       "instruction": "Enter the code from your authenticator app.",
       "codePlaceholder": "123456",
+      "codeLabel": "Verification code",
       "submitButton": "Verify"
     },
     "toast": {
       "loginFailed": "Login failed",
+      "invalidCredentialsDescription": "Incorrect email or password.",
       "mfaEnrollFailed": "Failed to start MFA enrollment",
-      "invalidCode": "Invalid code"
+      "mfaNotEnabledDescription": "Enable MFA first before continuing.",
+      "mfaEnabled": "MFA enabled",
+      "invalidCode": "Invalid code",
+      "invalidMfaDescription": "The MFA code is incorrect or has expired."
+    },
+    "rateLimited": {
+      "title": "Too many attempts",
+      "retryIn": "Try again in {{seconds}}s.",
+      "unlocked": "You can try again now"
     },
     "mfaModal": {
-      "title": "Enable MFA",
+      "title": "Enable two-factor authentication",
       "description": "To secure your account, enable two-factor authentication. Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.) and then enter the code.",
       "preparing": "Preparing...",
-      "manualEntryLabel": "Manual entry (to copy)",
-      "manualEntryHint": "Copy this secret into your app if you can't scan.",
+      "scanQrTitle": "Scan the QR code",
+      "scanAppsHint": "Use Google Authenticator, Authy, or an app compatible with two-step verification.",
+      "manualEntryLabel": "Manual setup",
+      "manualEntryHint": "If you can't scan the QR code, copy this secret into your app.",
       "copy": "Copy",
       "copied": "Copied",
+      "codeHint": "Enter the 6-digit code shown in your app.",
       "verificationCodeLabel": "Verification code",
       "confirmButton": "Confirm activation"
     }
