@@ -71,18 +71,106 @@ model Edge {
   @@index([projectId])
 }
 
-// ── V2 : auth multi-utilisateur + audit (prévu, non activé en V1) ──
+// ── V2 : auth multi-utilisateur + audit ──
+// Phase 2 (modèle identité) : les CRÉDENTIELLES vivent sur AuthIdentity (kind=local).
+// User ne porte que ses attributs + ses memberships par tenant. `role` est un MIRROR
+// temporaire (compat V1) — supprimé en fin de Phase 5B (le rôle réel = Membership.role).
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String
-  role         String    @default("owner") // owner | operator | viewer
-  // MFA (otplib v13) — activé dès la V1 pour le compte owner
-  mfaSecretEnc String? // secret TOTP chiffré
-  mfaEnabled   Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  auditLogs    AuditLog[]
-  updates      SystemUpdate[]
+  id        String   @id @default(cuid())
+  email     String?  @unique // attribut, jamais identifiant primaire (iss+sub fait foi)
+  name      String?
+  locale    String?
+  role      String   @default("owner") // MIRROR temporaire : owner | operator | viewer
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  identities  AuthIdentity[]
+  memberships Membership[]
+
+  auditLogs AuditLog[]
+  updates   SystemUpdate[]
+}
+
+// Une identité = un compte auprès d'UN provider (ou local). Un même User cumule :
+// local + oidc + saml + ... (aucun provider privilégié). subject = sub OIDC /
+// NameID SAML / stableAttr LDAP / "local:<userId>".
+model AuthIdentity {
+  id           String   @id @default(cuid())
+  userId       String
+  providerId   String   // id du provider (voir AuthProvider / seeds registry)
+  kind         String   // local | oidc | oauth2 | saml | ldap
+  issuer       String?  // obligatoire pour oidc/saml ; NULL pour local/ldap-bind
+  subject      String
+  email        String?
+
+  // Crédenciales locales uniquement (kind=local)
+  passwordHash String?
+  mfaSecretEnc String? // secret TOTP chiffré (AES-256-GCM, scope "mfa")
+  mfaEnabled   Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+  lastLoginAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, issuer, subject])
+  @@index([userId])
+}
+
+model Tenant {
+  id        String     @id @default(cuid())
+  name      String
+  slug      String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  memberships Membership[]
+}
+// Phase 5B : + clusters/settings/auditLogs/projects (tenant-scopés) — §4.4 du plan.
+
+// Rôle = propriété de la MEMBERSHIP, pas du User. Phase 2 : tenant par défaut unique.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  tenantId  String
+  role      String   // owner | operator | viewer
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+}
+
+// Providers d'authentification. id généré — JAMAIS de défaut vendor (correction N°4).
+// local est un provider comme les autres ; oidc/saml/ldap ne sont que des
+// configurations de protocole (aucune intégration vendor : correction N°7).
+model AuthProvider {
+  id        String   @id @default(cuid())
+  kind      String   // local | oidc | oauth2 | saml | ldap
+  name      String   // nom libre : "Entra Corp", "Company LDAP", "Local"...
+  enabled   Boolean  @default(false)
+  config    Json     @default("{}") // champs sensibles CHIFFRÉS individuellement (§8)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+// Phase 5B : + tenantId String? (null = provider global) — §4.2, correction N°22.
+
+// Identité inconnue d'un provider → ligne "pending" (jamais de User créé en auto).
+// Le workflow d'approbation effectif (owner → User + AuthIdentity + Membership)
+// est livré en Phase 5A (correction N°20). Phase 2 : tableau prête, remplie en 3/4.
+model PendingIdentity {
+  id                   String   @id @default(cuid())
+  providerId           String
+  issuer               String?
+  subject              String
+  email                String?
+  name                 String?
+  requestedForTenantId String?
+  status               String   @default("pending") // pending | approved | rejected
+  createdAt            DateTime @default(now())
+
+  @@unique([providerId, issuer, subject])
 }
 
 model AuditLog {

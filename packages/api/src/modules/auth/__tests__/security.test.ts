@@ -14,8 +14,18 @@ import { registerDeploySubscribers } from "../../../subscribers/on-deploy-finish
 // Tests SÉCURITÉ du module auth (true service, prisma mocké) :
 // rate-limiting composé, anti-énumération, cloisonnement des audiences JWT et
 // alimentation du journal d'audit.
+//
+// Phase 2 : les credentials vivent sur AuthIdentity(local) — on mocke donc
+// prisma.authIdentity (plus prisma.user) comme lookup de connexion.
 
 vi.mock("../../../lib/prisma", () => {
+  const authIdentity = {
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    findUniqueOrThrow: vi.fn(),
+    update: vi.fn(() => Promise.resolve({})),
+    create: vi.fn(),
+  };
   const user = {
     findUnique: vi.fn(),
     findUniqueOrThrow: vi.fn(),
@@ -26,12 +36,30 @@ vi.mock("../../../lib/prisma", () => {
     delete: vi.fn(),
     findMany: vi.fn(),
   };
+  const tenant = {
+    findUnique: vi.fn(),
+    upsert: vi.fn(),
+  };
+  const membership = {
+    create: vi.fn(),
+    updateMany: vi.fn(),
+  };
   const auditLog = {
     create: vi.fn(() => Promise.resolve({ id: "audit-1" })),
     findMany: vi.fn(),
     count: vi.fn(),
   };
-  return { prisma: { user, auditLog, systemInfo: { upsert: vi.fn() } } };
+  return {
+    prisma: {
+      authIdentity,
+      user,
+      tenant,
+      membership,
+      auditLog,
+      pendingIdentity: { upsert: vi.fn(), create: vi.fn() },
+      systemInfo: { upsert: vi.fn() },
+    },
+  };
 });
 
 const SECRET = "security-test-secret";
@@ -40,23 +68,41 @@ const PASSWORD = "F12345678";
 const SALT = "00112233445566778899aabbccddeeff";
 const PASSWORD_HASH = `${SALT}:${scryptSync(PASSWORD, SALT, 64).toString("hex")}`;
 
-const USER = {
-  id: "u-1",
+// AuthIdentity(local) : les credentials sont portés par l'identité depuis la Phase 2.
+const IDENTITY_USER = {
+  id: "i-1",
+  userId: "u-1",
+  providerId: "local",
+  kind: "local",
+  issuer: null,
+  subject: "local:u-1",
   email: "alice@hullbay.local",
   passwordHash: PASSWORD_HASH,
-  role: "owner",
   mfaEnabled: false,
   mfaSecretEnc: null,
+  createdAt: new Date(),
+  lastLoginAt: null,
+  user: { id: "u-1", role: "owner" },
 };
 
-const MFA_USER = {
-  id: "u-2",
+const IDENTITY_MFA_USER = {
+  id: "i-2",
+  userId: "u-2",
+  providerId: "local",
+  kind: "local",
+  issuer: null,
+  subject: "local:u-2",
   email: "bob@hullbay.local",
   passwordHash: PASSWORD_HASH,
-  role: "operator",
   mfaEnabled: true,
   mfaSecretEnc: "", // rempli dans beforeAll (dépend de l'env MFA_ENCRYPTION_KEY)
+  createdAt: new Date(),
+  lastLoginAt: null,
+  user: { id: "u-2", role: "operator" },
 };
+
+/** Row User minimale — utilisée par les chemins qui lisent le rôle après MFA. */
+const USER_ROW = { id: "u-2", role: "operator" };
 
 const inject = (app: FastifyInstance, url: string, opts: Record<string, unknown> = {}) =>
   app.inject({ method: "POST", url, ...opts });
@@ -80,7 +126,7 @@ const auditCallBy = (action: string) =>
 beforeAll(() => {
   process.env.JWT_SECRET = SECRET;
   process.env.MFA_ENCRYPTION_KEY = "";
-  MFA_USER.mfaSecretEnc = encryptSecret(generateSecret({ length: 20 }));
+  IDENTITY_MFA_USER.mfaSecretEnc = encryptSecret(generateSecret({ length: 20 }));
   // Enregistre l'audit événementiel (écrit dans AuditLog via prisma mocké).
   registerDeploySubscribers();
 });
@@ -108,12 +154,16 @@ describe("Auth hardening", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks() retire les implémentations mock (retourne undefined) :
+    // le subscriber d'audit appelle prisma.auditLog.create().catch() — il faut
+    // que .create() retourne un promesse pour que .catch() soit appelable.
+    vi.mocked(prisma.auditLog.create).mockResolvedValue({ id: "audit-1" } as never);
     authRateLimiter.clear();
   });
 
   describe("rate limiting (brute-force)", () => {
     it("bloque à la 6e tentative de login échouée (429 + Retry-After)", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(null as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(null as never);
 
       for (let i = 1; i <= 5; i++) {
         const res = await inject(app, "/api/auth/login", {
@@ -131,7 +181,7 @@ describe("Auth hardening", () => {
     });
 
     it("ne bloque pas un autre compte sur la même IP", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(null as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(null as never);
 
       for (let i = 1; i <= 5; i++) {
         await inject(app, "/api/auth/login", {
@@ -146,7 +196,7 @@ describe("Auth hardening", () => {
     });
 
     it("ne bloque pas depuis une autre IP sur le même compte", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(null as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(null as never);
 
       for (let i = 1; i <= 5; i++) {
         await inject(app, "/api/auth/login", {
@@ -163,35 +213,35 @@ describe("Auth hardening", () => {
     });
 
     it("un login réussi remet le compteur à zéro", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_USER as never);
 
       const fail = () =>
         inject(app, "/api/auth/login", {
-          payload: { email: USER.email, password: "wrong-pass" },
+          payload: { email: IDENTITY_USER.email, password: "wrong-pass" },
         });
 
       // 4 échecs puis succès : le compteur est purgé (on reste sous le seuil).
       for (let i = 1; i <= 4; i++) expect((await fail()).statusCode).toBe(401);
       expect((await inject(app, "/api/auth/login", {
-        payload: { email: USER.email, password: PASSWORD },
+        payload: { email: IDENTITY_USER.email, password: PASSWORD },
       })).statusCode).toBe(200);
 
       // Nouveau cycle de 4 échecs puis succès : toujours 200. Si le compteur
       // n'avait PAS été purgé, on serait bloqué (8 échecs cumulés > 5).
       for (let i = 1; i <= 4; i++) expect((await fail()).statusCode).toBe(401);
       expect((await inject(app, "/api/auth/login", {
-        payload: { email: USER.email, password: PASSWORD },
+        payload: { email: IDENTITY_USER.email, password: PASSWORD },
       })).statusCode).toBe(200);
     });
   });
 
   describe("anti-énumération", () => {
     it("réponse identique que le compte existe ou non (même statut + même corps)", async () => {
-      vi.mocked(prisma.user.findUnique) // compte INEXISTANT
+      vi.mocked(prisma.authIdentity.findFirst) // identité INEXISTANTE
         .mockResolvedValueOnce(null as never)
         .mockResolvedValueOnce(null as never)
-        .mockResolvedValueOnce(USER as never) // compte EXISTANT, mauvais mot de passe
-        .mockResolvedValueOnce(USER as never);
+        .mockResolvedValueOnce(IDENTITY_USER as never) // identité EXISTANTE, mauvais mot de passe
+        .mockResolvedValueOnce(IDENTITY_USER as never);
 
       const missing = await inject(app, "/api/auth/login", {
         payload: { email: "ghost@hullbay.local", password: "wrong-pass" },
@@ -200,10 +250,10 @@ describe("Auth hardening", () => {
         payload: { email: "ghost@hullbay.local", password: "wrong-pass2" },
       });
       const existing = await inject(app, "/api/auth/login", {
-        payload: { email: USER.email, password: "wrong-pass" },
+        payload: { email: IDENTITY_USER.email, password: "wrong-pass" },
       });
       const existing2 = await inject(app, "/api/auth/login", {
-        payload: { email: USER.email, password: "wrong-pass2" },
+        payload: { email: IDENTITY_USER.email, password: "wrong-pass2" },
       });
 
       expect(missing.statusCode).toBe(401);
@@ -240,11 +290,11 @@ describe("Auth hardening", () => {
 
     it("rejette un code MFA invalide (audience valide)", async () => {
       const pending = jwt.sign(
-        { sub: MFA_USER.id, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );
-      vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue(MFA_USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_MFA_USER as never);
 
       await expect(authService.verifyMfa(pending, "000000")).rejects.toMatchObject({
         code: "mfa_code_invalid",
@@ -255,7 +305,7 @@ describe("Auth hardening", () => {
   describe("expiration et état des tokens", () => {
     it("rejette un pendingToken MFA expiré (401 mfa_token_invalid)", async () => {
       const expired = jwt.sign(
-        { sub: MFA_USER.id, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
         SECRET,
         { expiresIn: "-1s", audience: "mfa-pending" },
       );
@@ -284,7 +334,7 @@ describe("Auth hardening", () => {
 
   describe("journal d'audit", () => {
     it("journalise auth.login.failed sur un échec de connexion", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(null as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(null as never);
       const res = await inject(app, "/api/auth/login", {
         payload: { email: "audit@hullbay.local", password: "wrong-pass" },
       });
@@ -299,25 +349,25 @@ describe("Auth hardening", () => {
     });
 
     it("journalise auth.login.success sur une connexion réussie", async () => {
-      vi.mocked(prisma.user.findUnique).mockResolvedValue(USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_USER as never);
       const res = await inject(app, "/api/auth/login", {
-        payload: { email: USER.email, password: PASSWORD },
+        payload: { email: IDENTITY_USER.email, password: PASSWORD },
       });
       expect(res.statusCode).toBe(200);
       await flush();
 
       const call = auditCallBy("auth.login.success");
       expect(call).toBeDefined();
-      expect(call![0].data.userId).toBe(USER.id);
+      expect(call![0].data.userId).toBe(IDENTITY_USER.userId);
     });
 
     it("journalise auth.mfa.failed sur un code TOTP invalide", async () => {
       const pending = jwt.sign(
-        { sub: MFA_USER.id, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );
-      vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue(MFA_USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_MFA_USER as never);
 
       await expect(authService.verifyMfa(pending, "000000")).rejects.toBeInstanceOf(AuthError);
       await flush();
@@ -327,13 +377,14 @@ describe("Auth hardening", () => {
 
     it("journalise auth.mfa.success sur un code TOTP valide", async () => {
       const secret = generateSecret({ length: 20 });
-      MFA_USER.mfaSecretEnc = encryptSecret(secret);
+      IDENTITY_MFA_USER.mfaSecretEnc = encryptSecret(secret);
       const pending = jwt.sign(
-        { sub: MFA_USER.id, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );
-      vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue(MFA_USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_MFA_USER as never);
+      vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue(USER_ROW as never);
 
       const result = await authService.verifyMfa(pending, generateSync({ secret }));
       expect(result.token).toBeTruthy();
@@ -341,18 +392,19 @@ describe("Auth hardening", () => {
 
       const call = auditCallBy("auth.mfa.success");
       expect(call).toBeDefined();
-      expect(call![0].data.userId).toBe(MFA_USER.id);
+      expect(call![0].data.userId).toBe(IDENTITY_MFA_USER.userId);
     });
 
     it("journalise auth.password.changed sur un changement de mot de passe", async () => {
-      vi.mocked(prisma.user.findUniqueOrThrow).mockResolvedValue(USER as never);
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue(IDENTITY_USER as never);
+      vi.mocked(prisma.authIdentity.update).mockResolvedValue(IDENTITY_USER as never);
 
-      await authService.changePassword(USER.id, PASSWORD, "F12345677");
+      await authService.changePassword(IDENTITY_USER.userId, PASSWORD, "F12345677");
       await flush();
 
       const call = auditCallBy("auth.password.changed");
       expect(call).toBeDefined();
-      expect(call![0].data.userId).toBe(USER.id);
+      expect(call![0].data.userId).toBe(IDENTITY_USER.userId);
     });
   });
 });

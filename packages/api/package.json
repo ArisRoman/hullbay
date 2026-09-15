@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "backfill:identity": "node src/modules/auth/scripts/backfill-identity.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

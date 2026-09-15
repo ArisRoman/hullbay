@@ -12,7 +12,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { pingDocker } from "./modules/docker-engine/client";
 import { registerProjectRoutes } from "./modules/projects/routes";
 import { registerReconcilerRoutes } from "./modules/reconciler/routes";
-import { registerAuthRoutes, registerAuthGuard } from "./modules/auth/routes";
+import { registerAuthRoutes, registerAuthGuard } from "./modules/auth";
 import { registerRegistryRoutes } from "./modules/registry/routes";
 import { registerServersRoutes } from "./modules/servers/routes";
 import { registerObservabilityRoutes } from "./modules/observability/routes";
