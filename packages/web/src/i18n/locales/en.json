@@ -68,6 +68,15 @@
       "codeHint": "Enter the 6-digit code shown in your app.",
       "verificationCodeLabel": "Verification code",
       "confirmButton": "Confirm activation"
+    },
+    "sso": {
+      "signInWith": "Continue with {{name}}",
+      "orContinueWithLocal": "or",
+      "failed": "SSO failed",
+      "pending": {
+        "title": "Account pending approval",
+        "description": "The account {{email}} is awaiting admin approval. You will be notified by email once access has been granted."
+      }
     }
   },
   "nav": {

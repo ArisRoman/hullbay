@@ -6,7 +6,7 @@
 
 import { createProvider } from "../providers/protocol-adapter"
 import type { AuthProviderContract } from "../providers/types"
-import { PROVIDER_SEEDS } from "./seeds"
+import { PROVIDER_SEEDS, loadTestOidcSeed } from "./seeds"
 
 export class ProviderRegistry {
   private providers = new Map<string, AuthProviderContract>()
@@ -20,8 +20,13 @@ export class ProviderRegistry {
   registerSeeds(): void {
     for (const seed of PROVIDER_SEEDS) {
       if (seed.enabled) {
-        this.register(createProvider(seed.kind, seed.id))
+        this.register(createProvider(seed.kind, seed.id, seed.config))
       }
+    }
+    // Test IdP (Keycloak e2e) : uniquement si config d'env explicite (jamais défaut).
+    const testSeed = loadTestOidcSeed()
+    if (testSeed?.enabled) {
+      this.register(createProvider(testSeed.kind, testSeed.id, testSeed.config))
     }
   }
 

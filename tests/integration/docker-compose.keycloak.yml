@@ -1,0 +1,36 @@
+# IdP Keycloak de TEST pour l'e2e SSO (Phase 3) — JAMAIS utilisé en production.
+#
+# Usage :
+#   docker compose -f tests/integration/docker-compose.keycloak.yml up -d
+#   OIDC_TEST_ENABLED=true \
+#   OIDC_TEST_ISSUER=http://localhost:8081/realms/hullbay \
+#   OIDC_TEST_CLIENT_ID=hullbay-e2e \
+#   OIDC_TEST_CLIENT_SECRET=<à créer dans le realm> \
+#   npm run dev:api
+#
+# Le realm `hullbay` et le client `hullbay-e2e` sont provisionnés au 1er boot
+# via le script `keycloak-oidc.e2e.mjs` (endpoints admin du realm).
+version: "3.8"
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --http-port 8081
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_DB: dev-file
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/realms/master/.well-known/openid-configuration || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+
+volumes:
+  keycloak-data:

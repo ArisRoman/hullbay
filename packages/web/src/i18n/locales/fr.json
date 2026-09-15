@@ -68,6 +68,15 @@
       "codeHint": "Saisissez le code à 6 chiffres affiché dans votre application.",
       "verificationCodeLabel": "Code de vérification",
       "confirmButton": "Confirmer l'activation"
+    },
+    "sso": {
+      "signInWith": "Continuer avec {{name}}",
+      "orContinueWithLocal": "ou",
+      "failed": "SSO échoué",
+      "pending": {
+        "title": "Compte en attente d'approbation",
+        "description": "Le compte {{email}} est en attente de validation par un administrateur. Tu seras notifié(e) par e-mail une fois l'accès approuvé."
+      }
     }
   },
   "nav": {

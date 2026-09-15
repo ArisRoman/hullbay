@@ -14,8 +14,18 @@ const PUBLIC_PATHS = new Set([
   "/api/auth/mfa/verify",
   "/api/auth/bootstrap",
   "/api/auth/needs-bootstrap",
+  // Liste des providers activés (login sans token).
+  "/api/auth/providers",
   "/api/system/environment",
 ])
+
+// Flux SSO (initiateLogin + callback) : routes à préfixe dynamique.
+const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/"]
+
+function isPublicPath(path: string): boolean {
+  if (PUBLIC_PATHS.has(path)) return true
+  return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+}
 
 const MFA_SETUP_PATHS = new Set([
   "/api/auth/mfa/enroll",
@@ -28,7 +38,7 @@ export function registerAuthGuard(app: FastifyInstance) {
     if (!req.url.startsWith("/api/")) return
 
     const path = req.url.split("?")[0] ?? ""
-    if (PUBLIC_PATHS.has(path)) return
+    if (isPublicPath(path)) return
 
     const header = req.headers.authorization
     const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined

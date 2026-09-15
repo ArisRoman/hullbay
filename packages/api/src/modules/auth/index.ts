@@ -20,6 +20,7 @@ export type { Role } from "./authorization/rbac"
 // Routes
 export { registerAuthGuard } from "./routes/guard"
 export { registerAuthRoutes } from "./routes/auth.routes"
+export { registerSsoRoutes } from "./routes/sso.routes"
 
 // Provider registry
 export { providerRegistry } from "./registry/provider-registry"

@@ -11,6 +11,7 @@ export class AuthStateStore<T = unknown> {
   put(value: T, ttlMs: number): string {
     const key = crypto.randomUUID()
     this.store.set(key, { value, expiresAt: Date.now() + ttlMs })
+    if (this.store.size % 64 === 0) this.purge()
     return key
   }
 
@@ -40,3 +41,19 @@ export class AuthStateStore<T = unknown> {
 export const nonceStore = new AuthStateStore<string>()
 export const stateStore = new AuthStateStore<{ redirectUri: string }>()
 export const pkceStore = new AuthStateStore<{ codeVerifier: string; redirectUri: string }>()
+
+// ── Stores SSO (Phase 3) : state/pkce avec TTL 10 min, consommation unique ──
+export interface OidcStateRecord {
+  providerId: string
+  redirectUri: string
+  codeVerifier: string
+  nonce: string
+}
+
+export interface Oauth2StateRecord {
+  providerId: string
+  redirectUri: string
+}
+
+export const oidcStateStore = new AuthStateStore<OidcStateRecord>()
+export const oauth2StateStore = new AuthStateStore<Oauth2StateRecord>()

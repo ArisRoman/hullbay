@@ -145,6 +145,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ pendingToken, code }),
     }),
+  listAuthProviders: () =>
+    req<AuthProviderPublic[]>("/api/auth/providers"),
   me: () =>
     req<{ id: string; email: string; role: string; mfaEnabled: boolean }>(
       "/api/auth/me",
@@ -411,6 +413,13 @@ export const api = {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type Environment = "development" | "test" | "production";
+
+export type AuthProviderPublic = {
+  id: string;
+  kind: "oidc" | "oauth2" | "saml";
+  name: string;
+  enabled: boolean;
+};
 
 export type Cluster = {
   id: string;
