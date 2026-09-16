@@ -60,4 +60,35 @@ export function loadTestOidcSeed(): ProviderSeed | null {
   }
 }
 
+/**
+ * Provider SAML "test" (Keycloak en e2e/CI). Actif uniquement si SAML_TEST_*
+ * renseignées — jamais par défaut. Permet de dérouler le flux SAML complet
+ * (login → ACS) contre un IdP de test provisionné par keycloak-saml.e2e.mjs.
+ */
+export function loadTestSamlSeed(): ProviderSeed | null {
+  const idpIssuer = process.env.SAML_TEST_IDP_ISSUER
+  const idpCert = process.env.SAML_TEST_IDP_CERT
+  const spIssuer = process.env.SAML_TEST_SP_ENTITY
+  if (!idpIssuer || !idpCert || !spIssuer) return null
+
+  const enabled = process.env.SAML_TEST_ENABLED === "true"
+  const port = process.env.SAML_TEST_IDP_PORT ?? "8081"
+  const base = idpIssuer.startsWith("http") ? idpIssuer : `http://localhost:${port}/realms/hullbay`
+  const apiPort = process.env.API_PORT ?? "4000"
+
+  return {
+    id: "saml-e2e",
+    kind: "saml",
+    name: "Keycloak SAML (test)",
+    enabled,
+    config: {
+      idpIssuer: base,
+      idpCert,
+      spIssuer,
+      entryPoint: `${base.replace(/\/$/, "")}/protocol/saml/clients/hullbay-saml-e2e`,
+      callbackUrl: `http://localhost:${apiPort}/api/auth/saml/saml-e2e/acs`,
+    } as ProviderConfig,
+  }
+}
+
 export const DEFAULT_TENANT = { name: "Default", slug: "default" } as const

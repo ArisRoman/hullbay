@@ -29,6 +29,7 @@ const AUDITED: Record<string, string> = {
   "auth.mfa.success": "auth.mfa.success",
   "auth.mfa.failed": "auth.mfa.failed",
   "auth.password.changed": "auth.password.changed",
+  "auth.saml.failed": "auth.saml.failed",
 }
 
 export function registerDeploySubscribers(): void {

@@ -12,7 +12,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { pingDocker } from "./modules/docker-engine/client";
 import { registerProjectRoutes } from "./modules/projects/routes";
 import { registerReconcilerRoutes } from "./modules/reconciler/routes";
-import { registerAuthRoutes, registerAuthGuard, registerSsoRoutes } from "./modules/auth";
+import { registerAuthRoutes, registerAuthGuard, registerSsoRoutes, registerSamlRoutes } from "./modules/auth";
 import { registerRegistryRoutes } from "./modules/registry/routes";
 import { registerServersRoutes } from "./modules/servers/routes";
 import { registerObservabilityRoutes } from "./modules/observability/routes";
@@ -68,6 +68,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           "req.body.newPassword",
           "req.body.credential",
           "req.body.privateKey",
+          "req.body.SAMLResponse",
           "req.headers.authorization",
           "req.headers.cookie",
         ],
@@ -152,6 +153,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
   if (!skipRoutes) {
     await registerAuthRoutes(app);
     await registerSsoRoutes(app);
+    await registerSamlRoutes(app);
     await registerSystemRoutes(app);
     await registerProjectRoutes(app);
     await registerReconcilerRoutes(app);

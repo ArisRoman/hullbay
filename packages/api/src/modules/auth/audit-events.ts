@@ -12,6 +12,7 @@ export const AUTH_AUDIT_EVENTS = {
   mfaSuccess: "auth.mfa.success",
   mfaFailed: "auth.mfa.failed",
   passwordChanged: "auth.password.changed",
+  samlFailed: "auth.saml.failed",
 } as const
 
 export type AuthAuditEvent = (typeof AUTH_AUDIT_EVENTS)[keyof typeof AUTH_AUDIT_EVENTS]

@@ -55,5 +55,12 @@ export interface Oauth2StateRecord {
   redirectUri: string
 }
 
+// ── Store SSO (Phase 4) : RelayState SAML, consommation unique ──
+export interface SamlStateRecord {
+  providerId: string
+  redirectUri: string
+}
+
 export const oidcStateStore = new AuthStateStore<OidcStateRecord>()
 export const oauth2StateStore = new AuthStateStore<Oauth2StateRecord>()
+export const samlStateStore = new AuthStateStore<SamlStateRecord>()

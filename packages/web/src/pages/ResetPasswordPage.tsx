@@ -10,12 +10,6 @@ export function ResetPasswordPage() {
     <div className="flex min-h-full w-full items-center justify-center bg-ui-bg-subtle px-4 py-8">
       <div className="w-full max-w-[390px]">
 
-        {/* Logo */}
-        <div className="mb-6 flex justify-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-ui-bg-base shadow-sm">
-            <div className="h-7 w-7 rounded-lg bg-ui-fg-base" />
-          </div>
-        </div>
 
         {/* Header */}
         <div className="mb-6 text-center">

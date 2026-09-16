@@ -35,7 +35,9 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
     api
       .listAuthProviders()
       .then((providers) => {
-        if (!cancelled) setSsoProviders(providers.filter((p) => p.kind === "oidc" || p.kind === "oauth2"))
+        if (!cancelled) {
+          setSsoProviders(providers.filter((p) => p.kind === "oidc" || p.kind === "oauth2" || p.kind === "saml"))
+        }
       })
       .catch(() => {
         if (!cancelled) setSsoProviders([])
@@ -156,12 +158,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
   <div className="flex min-h-full w-full items-center justify-center bg-ui-bg-subtle px-4 py-8">
     <div className="w-full max-w-[390px]">
 
-      {/* Logo */}
-      <div className="mb-6 flex justify-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-ui-bg-base shadow-sm">
-          <div className="h-7 w-7 rounded-lg bg-ui-fg-base" />
-        </div>
-      </div>
+
 
       {/* Header */}
       <div className="mb-6 text-center">
@@ -211,7 +208,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
       {!pendingToken ? (
         <div className="flex flex-col gap-4">
 
-          {/* SSO : boutons vers les providers OIDC/OAuth2 activés */}
+          {/* SSO : boutons vers les providers OIDC/OAuth2/SAML activés */}
           {ssoProviders && ssoProviders.length > 0 && (
             <>
               <div className="flex flex-col gap-2">
@@ -219,7 +216,10 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
                   <Button
                     key={p.id}
                     variant="secondary"
-                    onClick={() => (window.location.href = `/api/auth/sso/${encodeURIComponent(p.id)}/login`)}
+                    onClick={() => {
+                      const base = p.kind === "saml" ? "/api/auth/saml" : "/api/auth/sso"
+                      window.location.href = `${base}/${encodeURIComponent(p.id)}/login`
+                    }}
                     disabled={disabled}
                     className="h-10 w-full rounded-lg disabled:opacity-50"
                   >

@@ -20,7 +20,8 @@ const PUBLIC_PATHS = new Set([
 ])
 
 // Flux SSO (initiateLogin + callback) : routes à préfixe dynamique.
-const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/"]
+// Phase 3 : oidc/oauth2 (sso). Phase 4 : saml (saml.routes).
+const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/", "/api/auth/saml/"]
 
 function isPublicPath(path: string): boolean {
   if (PUBLIC_PATHS.has(path)) return true
