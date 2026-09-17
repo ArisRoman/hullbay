@@ -222,6 +222,33 @@
     "system": "system",
     "targetProject": "project {{id}}",
     "targetServer": "server {{id}}",
+    "actions": {
+      "deploy": { "success": "Deployment succeeded", "failed": "Deployment failed" },
+      "destroy": "Destroy",
+      "rebuild": "Rebuild",
+      "server": {
+        "provisioned": "Server provisioned",
+        "removed": "Server removed",
+        "role": { "changed": "Server role changed" }
+      },
+      "registry": { "set": "Registry set" },
+      "user": {
+        "created": "User created",
+        "deleted": "User deleted",
+        "role": { "changed": "User role changed" }
+      },
+      "auth": {
+        "mfa": { "enabled": "MFA enabled", "success": "MFA verified", "failed": "MFA failed" },
+        "login": { "success": "Sign-in succeeded", "failed": "Sign-in failed" },
+        "password": { "changed": "Password changed" },
+        "saml": { "failed": "SAML failure" },
+        "provider": { "created": "Provider created", "updated": "Provider updated", "deleted": "Provider deleted" },
+        "pending": { "created": "Pending identity", "approved": "Identity approved", "rejected": "Identity rejected" }
+      },
+      "autoscale": { "applied": "Autoscaling applied" },
+      "prune": { "finished": "Prune finished" },
+      "secret": { "set": "Secret set", "removed": "Secret removed" }
+    },
     "table": {
       "date": "Date",
       "action": "Action",

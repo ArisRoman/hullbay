@@ -7,6 +7,7 @@ import { PageHeader, PageContainer } from "../components/PageHeader"
 import { ListContainer } from "../components/ListContainer"
 import { EmptyState } from "../components/EmptyState"
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 
 const PAGE_SIZE = 50
 
@@ -24,10 +25,27 @@ const ACTIONS = [
   "user.created",
   "user.role.changed",
   "user.deleted",
-  "mfa.enabled",
   "autoscale.applied",
   "prune.finished",
+  "auth.login.success",
+  "auth.login.failed",
+  "auth.mfa.enabled",
+  "auth.mfa.success",
+  "auth.mfa.failed",
+  "auth.password.changed",
+  "auth.saml.failed",
+  "auth.provider.created",
+  "auth.provider.updated",
+  "auth.provider.deleted",
+  "auth.pending.created",
+  "auth.pending.approved",
+  "auth.pending.rejected",
 ]
+
+/** Libellé traduit d'une action d'audit, repli sur la clé brute si inconnue. */
+function actionLabel(t: TFunction, action: string): string {
+  return t(`auditLog.actions.${action}`, { defaultValue: action })
+}
 
 function actionColor(action: string): "red" | "orange" | "green" | "grey" {
   if (action.includes("failed") || action === "destroy" || action.includes("removed") || action === "user.deleted") {
@@ -85,7 +103,7 @@ export function AuditPage() {
                   <Select.Item value="__all">{t('auditLog.filterAllActions')}</Select.Item>
                   {ACTIONS.map((a) => (
                     <Select.Item key={a} value={a}>
-                      {a}
+                      {actionLabel(t, a)}
                     </Select.Item>
                   ))}
                 </Select.Content>
@@ -145,9 +163,9 @@ export function AuditPage() {
               {detailEntry ? (
                 <div className="space-y-4">
                   <div>
-                    <Heading level="h3">{detailEntry.action}</Heading>
+                    <Heading level="h3">{actionLabel(t, detailEntry.action)}</Heading>
                     <Badge color={actionColor(detailEntry.action)} size="2xsmall" className="mt-2">
-                      {detailEntry.action}
+                      {actionLabel(t, detailEntry.action)}
                     </Badge>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
@@ -240,7 +258,7 @@ function AuditRow({ e, onSelect }: { e: AuditEntry; onSelect: () => void }) {
       </Table.Cell>
       <Table.Cell>
         <Badge size="2xsmall" color={actionColor(e.action)}>
-          {e.action}
+          {actionLabel(t, e.action)}
         </Badge>
       </Table.Cell>
       <Table.Cell>{e.userEmail ?? <span className="text-ui-fg-muted">{t('auditLog.system')}</span>}</Table.Cell>

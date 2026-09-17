@@ -58,7 +58,7 @@ export function AddServerModal({
       onOpenChange={(o) => { onOpenChange(o); if (o) { clear(); setAsManager(forceManager) } }}
     >
       <FocusModal.Content>
-        <FocusModal.Header><Heading>{t("clusters.detail.addServer.title")}</Heading></FocusModal.Header>
+        <FocusModal.Header><FocusModal.Title asChild><Heading>{t("clusters.detail.addServer.title")}</Heading></FocusModal.Title></FocusModal.Header>
         <FocusModal.Body className="overflow-y-auto">
           <ModalForm size="lg" onSubmit={(e?: React.FormEvent) => { e?.preventDefault?.(); if (canSubmit) provision.mutate() }}>
             <div className="grid grid-cols-2 gap-2">

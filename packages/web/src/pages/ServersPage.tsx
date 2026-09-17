@@ -285,7 +285,9 @@ export function ServersPage() {
       <FocusModal open={open} onOpenChange={setOpen}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>Ajouter un serveur</Heading>
+            <FocusModal.Title asChild>
+              <Heading>Ajouter un serveur</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm

@@ -61,7 +61,9 @@ export function DeployPlanModal({
     <FocusModal open={open} onOpenChange={onOpenChange}>
       <FocusModal.Content>
         <FocusModal.Header>
-          <Heading>Revoir et déployer · {graph.name}</Heading>
+          <FocusModal.Title asChild>
+            <Heading>Revoir et déployer · {graph.name}</Heading>
+          </FocusModal.Title>
         </FocusModal.Header>
         <FocusModal.Body className="overflow-y-auto">
           <div className="mx-auto flex w-full max-w-xl flex-col gap-5 px-4 py-8">

@@ -180,7 +180,9 @@ export function ProjectsPage() {
       <FocusModal open={createOpen} onOpenChange={setCreateOpen}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>{t('projects.createModal.title')}</Heading>
+            <FocusModal.Title asChild>
+              <Heading>{t('projects.createModal.title')}</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm onSubmit={() => name.trim() && createMut.mutate()}>
@@ -240,7 +242,9 @@ export function ProjectsPage() {
       <FocusModal open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>{t('projects.editModal.title')}</Heading>
+            <FocusModal.Title asChild>
+              <Heading>{t('projects.editModal.title')}</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm onSubmit={() => editName.trim() && updateMut.mutate()}>

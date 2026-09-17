@@ -163,7 +163,9 @@ export function UsersPage() {
       <FocusModal open={open} onOpenChange={setOpen}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>{t('users.createModal.title')}</Heading>
+            <FocusModal.Title asChild>
+              <Heading>{t('users.createModal.title')}</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm onSubmit={() => canSubmit && createMut.mutate()}>

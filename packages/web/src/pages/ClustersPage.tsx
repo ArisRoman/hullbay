@@ -385,7 +385,9 @@ export function ClustersPage() {
       <FocusModal open={open} onOpenChange={setOpen}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>{t("clusters.createModal.title")}</Heading>
+            <FocusModal.Title asChild>
+              <Heading>{t("clusters.createModal.title")}</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm
@@ -535,7 +537,9 @@ export function ClustersPage() {
       >
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>{t("clusters.deleteConfirm.title")}</Heading>
+            <FocusModal.Title asChild>
+              <Heading>{t("clusters.deleteConfirm.title")}</Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <div className="flex flex-col gap-4">

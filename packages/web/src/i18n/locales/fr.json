@@ -222,6 +222,33 @@
     "system": "système",
     "targetProject": "projet {{id}}",
     "targetServer": "serveur {{id}}",
+    "actions": {
+      "deploy": { "success": "Déploiement réussi", "failed": "Déploiement échoué" },
+      "destroy": "Destruction",
+      "rebuild": "Reconstruction",
+      "server": {
+        "provisioned": "Serveur provisionné",
+        "removed": "Serveur retiré",
+        "role": { "changed": "Rôle serveur modifié" }
+      },
+      "registry": { "set": "Registre configuré" },
+      "user": {
+        "created": "Utilisateur créé",
+        "deleted": "Utilisateur supprimé",
+        "role": { "changed": "Rôle utilisateur modifié" }
+      },
+      "auth": {
+        "mfa": { "enabled": "MFA activée", "success": "MFA validée", "failed": "MFA échouée" },
+        "login": { "success": "Connexion réussie", "failed": "Connexion échouée" },
+        "password": { "changed": "Mot de passe modifié" },
+        "saml": { "failed": "Échec SAML" },
+        "provider": { "created": "Fournisseur créé", "updated": "Fournisseur modifié", "deleted": "Fournisseur supprimé" },
+        "pending": { "created": "Identité en attente", "approved": "Identité approuvée", "rejected": "Identité rejetée" }
+      },
+      "autoscale": { "applied": "Autoscaling appliqué" },
+      "prune": { "finished": "Élagage terminé" },
+      "secret": { "set": "Secret défini", "removed": "Secret supprimé" }
+    },
     "table": {
       "date": "Date",
       "action": "Action",
