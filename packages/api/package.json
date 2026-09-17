@@ -14,7 +14,8 @@
     "test:coverage": "vitest run --coverage",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "backfill:identity": "node src/modules/auth/scripts/backfill-identity.mjs"
+    "backfill:identity": "node src/modules/auth/scripts/backfill-identity.mjs",
+    "secrets:rotate": "node src/modules/auth/scripts/rotate-secrets.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

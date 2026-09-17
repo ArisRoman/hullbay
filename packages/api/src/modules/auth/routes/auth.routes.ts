@@ -210,6 +210,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         email: u?.email,
         role: u?.role,
         mfaEnabled: identity?.mfaEnabled ?? (u as { mfaEnabled?: boolean } | null)?.mfaEnabled ?? false,
+        // true uniquement pour un utilisateur local non-enrôlé ; les
+        // utilisateurs SSO (pas d'identité locale) ne sont pas concernés
+        // par l'enrôlement TOTP local.
+        mfaRequired: identity ? !identity.mfaEnabled : false,
       }
     },
   )

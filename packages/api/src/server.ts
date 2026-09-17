@@ -12,7 +12,16 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { pingDocker } from "./modules/docker-engine/client";
 import { registerProjectRoutes } from "./modules/projects/routes";
 import { registerReconcilerRoutes } from "./modules/reconciler/routes";
-import { registerAuthRoutes, registerAuthGuard, registerSsoRoutes, registerSamlRoutes } from "./modules/auth";
+import {
+  registerAuthRoutes,
+  registerAuthGuard,
+  registerSsoRoutes,
+  registerSamlRoutes,
+  registerProvidersRoutes,
+  registerPendingRoutes,
+  providerRegistry,
+  syncProviderSeedsToDb,
+} from "./modules/auth";
 import { registerRegistryRoutes } from "./modules/registry/routes";
 import { registerServersRoutes } from "./modules/servers/routes";
 import { registerObservabilityRoutes } from "./modules/observability/routes";
@@ -154,6 +163,8 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     await registerAuthRoutes(app);
     await registerSsoRoutes(app);
     await registerSamlRoutes(app);
+    await registerProvidersRoutes(app);
+    await registerPendingRoutes(app);
     await registerSystemRoutes(app);
     await registerProjectRoutes(app);
     await registerReconcilerRoutes(app);
@@ -172,6 +183,18 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
 
     // Seed du singleton SystemInfo (version courante = tag déployé via IMAGE_TAG).
     await seedSystemInfo();
+
+    // Registry des providers d'auth (Phase 5A1) : AuthProvider = source de vérité.
+    // Les seeds sont synchronisées en base, puis le registre est hydraté depuis
+    // les rows (config déchiffrée, `enabled` injecté). En cas de DB indisponible
+    // on garde l'init mémoire (seeds) pour ne pas crasher le boot.
+    try {
+      await syncProviderSeedsToDb();
+      await providerRegistry.loadFromDb();
+      app.log.info("[auth] providers synchronisés + registre hydraté depuis AuthProvider");
+    } catch (err) {
+      app.log.warn(`[auth] sync providers ignorée (DB indisponible ?): ${err}`);
+    }
 
     // Reprise des mises à jour orphelines (le process meurt pendant l'update de
     // l'API lui-même — la finalisation success/failed se joue ici, au boot).

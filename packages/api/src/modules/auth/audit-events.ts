@@ -13,6 +13,13 @@ export const AUTH_AUDIT_EVENTS = {
   mfaFailed: "auth.mfa.failed",
   passwordChanged: "auth.password.changed",
   samlFailed: "auth.saml.failed",
+  // Phase 5A1 — CRUD providers + workflow approbation.
+  providerCreated: "auth.provider.created",
+  providerUpdated: "auth.provider.updated",
+  providerDeleted: "auth.provider.deleted",
+  pendingCreated: "auth.pending.created",
+  pendingApproved: "auth.pending.approved",
+  pendingRejected: "auth.pending.rejected",
 } as const
 
 export type AuthAuditEvent = (typeof AUTH_AUDIT_EVENTS)[keyof typeof AUTH_AUDIT_EVENTS]

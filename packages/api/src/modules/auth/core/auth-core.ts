@@ -13,7 +13,7 @@ import { hashPassword, verifyPassword } from "../providers/local/password"
 import { providerRegistry } from "../registry/provider-registry"
 import { sessionManager } from "./session-manager"
 import { resolveIdentity } from "./identity-mapping"
-import { startTotpEnrollment, verifyTotpCode } from "../mfa/totp"
+import { startTotpEnrollment, totpUri, verifyTotpCode } from "../mfa/totp"
 import { ensureDefaultTenant } from "../identity/auth-identity.service"
 
 // ── Trace helper (fire-and-forget) ──
@@ -123,14 +123,25 @@ export async function verifyMfa(pendingToken: string, code: string) {
 
 export async function startMfaEnrollment(userId: string) {
   const user = await getUser(userId)
-  const { otpauth, secret } = startTotpEnrollment("hullbay", user.email ?? userId)
+  const label = user.email ?? userId
 
-  const { encryptSecret } = await import("../secrets/secret-encryption-service")
   const identity = await findLocalIdentityByUserId(userId)
   if (!identity) {
     throw new AuthError("mfa_not_configured", "identité locale introuvable", 400)
   }
 
+  const { encryptSecret, decryptSecret } = await import("../secrets/secret-encryption-service")
+
+  // Enrôlement idempotent : tant que la MFA n'est pas confirmée, un second appel
+  // (StrictMode, remount, double-clic) doit RÉUTILISER le secret en attente au lieu
+  // d'en régénérer un — sinon le secret affiché ne correspond plus à celui stocké
+  // et la confirmation échoue (mfa_code_invalid).
+  if (identity.mfaSecretEnc && !identity.mfaEnabled) {
+    const secret = decryptSecret(identity.mfaSecretEnc)
+    return { otpauth: totpUri("hullbay", label, secret), secret }
+  }
+
+  const { otpauth, secret } = startTotpEnrollment("hullbay", label)
   await prisma.authIdentity.update({
     where: { id: identity.id },
     data: { mfaSecretEnc: encryptSecret(secret) },

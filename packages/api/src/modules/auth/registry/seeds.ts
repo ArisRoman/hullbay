@@ -21,6 +21,20 @@ export interface ProviderSeed {
   config?: ProviderConfig
 }
 
+/**
+ * Champs sensibles chiffrés individuellement dans AuthProvider.config (§8 du plan).
+ * Par kind : oidc/oauth2 → clientSecret ; SAML → aucun secret (idpCert public, §4).
+ * La clé privée SP SAML (signature AuthnRequest), si ajoutée, sera chiffrée ici →
+ * scope "provider" (rotation 5A1-D).
+ */
+export const SENSITIVE_FIELDS_BY_KIND: Record<ProviderKind, string[]> = {
+  local: [],
+  oidc: ["clientSecret"],
+  oauth2: ["clientSecret"],
+  saml: [],
+  ldap: [],
+}
+
 export const PROVIDER_SEEDS: ProviderSeed[] = [
   { id: "local", kind: "local", name: "Local", enabled: true },
   { id: "oidc-generic", kind: "oidc", name: "OIDC", enabled: false },

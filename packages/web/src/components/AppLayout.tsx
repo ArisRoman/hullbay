@@ -16,6 +16,7 @@ import {
   ArrowPath,
   Sparkles,
   DecisionProcess,
+  ShieldCheck,
 } from "@medusajs/icons";
 import { api, auth } from "../lib/api"
 import { useMe, type Role } from "../lib/useMe"
@@ -39,6 +40,7 @@ const NAV: NavItem[] = [
   { to: "/registries", labelKey: "nav.registries", Icon: CircleStack, min: "owner" },
   { to: "/secrets", labelKey: "nav.secrets", Icon: Key, min: "operator" },
   { to: "/users", labelKey: "nav.users", Icon: Users, min: "owner" },
+  { to: "/providers", labelKey: "nav.providers", Icon: ShieldCheck, min: "owner" },
   { to: "/updates", labelKey: "nav.updates", Icon: ArrowPath, min: "owner" },
   { to: "/settings", labelKey: "nav.settings", Icon: CogSixTooth, min: "viewer" },
 ]

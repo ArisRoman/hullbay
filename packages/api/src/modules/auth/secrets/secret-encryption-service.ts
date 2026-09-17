@@ -3,6 +3,15 @@
  * domaine (MFA / PROVIDER / SESSION) — clé indépendante par scope pour permettre
  * une rotation indépendante (§8 du plan).
  *
+ * Rotation (Phase 5A1) : re-chiffrement progressif PAR ENREGISTREMENT, sans
+ * down-time ni big-bang. Le payload chiffré porte une empreinte de clé
+ * (fingerprint) `k<hex>:iv:tag:data` pour :
+ *   - détecter les enregistrements déjà tournés (idempotence du script) ;
+ *   - déchiffrer les anciens payloads pendant la fenêtre de bascule
+ *     (`{ENV}_PREVIOUS`), i.e. compat ascendante pendant la transition.
+ * Les payloads LEGACY (sans préfixe `k…:`) restent déchiffrables (décrypt
+ * tente current → previous), la bascule ne casse jamais la lecture.
+ *
  * Les appels existants (auth/service, registry/service, lib/keys, lib/ssh-tunnel,
  * workflows) passent par la façade compat encryptSecret/decryptSecret → scope "mfa".
  */
@@ -17,27 +26,75 @@ const SECRET_CONFIG: Record<SecretKind, { envKey: string; label: string }> = {
   session:  { envKey: "SESSION_SIGNING_KEY",       label: "SESSION" },
 }
 
+/** Empreinte (16 hex soit 8 octets) d'une clé — rend les rotations détectables.
+ *  Préfixée `k…:` sur les payloads chiffrés par `encrypt`.
+ *  Sans clé fournie, utilise la clé courante du scope (celle qui décrypte). */
+export function keyFingerprint(kind: SecretKind, keyHex?: string): string {
+  const bytes = keyHex ? Buffer.from(keyHex, "hex") : keyFor(kind)
+  return createHash("sha256").update(bytes).digest("hex").slice(0, 16)
+}
+
+function envKeyOf(kind: SecretKind): string {
+  return SECRET_CONFIG[kind].envKey
+}
+
+function readEnvKey(kind: SecretKind, variant?: "new" | "previous"): string | undefined {
+  const base = envKeyOf(kind)
+  const name = variant ? `${base}_${variant.toUpperCase()}` : base
+  const hex = process.env[name]
+  if (hex && /^[0-9a-fA-F]{64}$/.test(hex)) return hex
+  return undefined
+}
+
+/** Clé de chiffrement courante pour un scope (fallback historique JWT_SECRET). */
 function keyFor(kind: SecretKind): Buffer {
-  const hex = process.env[SECRET_CONFIG[kind].envKey]
-  if (hex && /^[0-9a-fA-F]{64}$/.test(hex)) {
-    return Buffer.from(hex, "hex")
-  }
+  const hex = readEnvKey(kind)
+  if (hex) return Buffer.from(hex, "hex")
   const fallback = process.env.JWT_SECRET || "dev-insecure-key"
   return createHash("sha256").update(fallback).digest()
 }
 
-function encrypt(kind: SecretKind, plain: string): string {
+/** Chiffre avec la clé courante (legacy `iv:tag:data`) ou une clé explicite
+ *  (`k<fingerprint>:iv:tag:data` — rotation 5A1). */
+function encrypt(kind: SecretKind, plain: string, keyHex?: string): string {
   const iv = randomBytes(12)
-  const cipher = createCipheriv("aes-256-gcm", keyFor(kind), iv)
+  const cipher = createCipheriv("aes-256-gcm", keyHex ? Buffer.from(keyHex, "hex") : keyFor(kind), iv)
   const enc = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()])
   const tag = cipher.getAuthTag()
-  return `${iv.toString("hex")}:${tag.toString("hex")}:${enc.toString("hex")}`
+  const body = `${iv.toString("hex")}:${tag.toString("hex")}:${enc.toString("hex")}`
+  if (keyHex) return `k${keyFingerprint(kind, keyHex)}:${body}`
+  return body
 }
 
+/** Déchiffre un payload (nouveau format à empreinte OU legacy). Tentative clé
+ *  courante puis précédente — aucun enregistrement n'est perdu pendant la bascule. */
 function decrypt(kind: SecretKind, payload: string): string {
-  const [ivHex, tagHex, dataHex] = payload.split(":")
+  try {
+    return decryptInternal(kind, payload, readEnvKey(kind))
+  } catch {
+    const prev = readEnvKey(kind, "previous")
+    if (prev) return decryptInternal(kind, payload, prev)
+    throw new Error("format secret invalide")
+  }
+}
+
+function decryptInternal(kind: SecretKind, payload: string, keyHex?: string): string {
+  const parts = payload.split(":")
+  // Nouveau format : `k<fingerprint>:iv:tag:data` → la clé atteste l'empreinte.
+  let ivHex: string | undefined
+  let tagHex: string | undefined
+  let dataHex: string | undefined
+  if (/^k[0-9a-f]{16}$/.test(parts[0] ?? "") && parts.length === 6) {
+    ivHex = parts[2]
+    tagHex = parts[3]
+    dataHex = parts[4]
+  } else if (parts.length === 3) {
+    ;[ivHex, tagHex, dataHex] = parts
+  } else {
+    throw new Error("format secret invalide")
+  }
   if (!ivHex || !tagHex || !dataHex) throw new Error("format secret invalide")
-  const decipher = createDecipheriv("aes-256-gcm", keyFor(kind), Buffer.from(ivHex, "hex"))
+  const decipher = createDecipheriv("aes-256-gcm", keyHex ? Buffer.from(keyHex, "hex") : keyFor(kind), Buffer.from(ivHex, "hex"))
   decipher.setAuthTag(Buffer.from(tagHex, "hex"))
   return Buffer.concat([
     decipher.update(Buffer.from(dataHex, "hex")),
@@ -75,12 +132,53 @@ export function decryptObject<T extends Record<string, unknown>>(
   return copy as T
 }
 
+export interface SecretRotationTarget {
+  /** Identifiant unique de l'enregistrement (pour rapports d'avancement). */
+  ref: string
+  /** Payload chiffré ACTUEL (avec ou sans empreinte). */
+  encrypted: string
+}
+
+export interface SecretRotationResult {
+  rotated: number
+  skipped: number
+  failed: number
+}
+
 /**
- * Rotation de clé (stub Phase 5A) : ré-chiffre progressivement tous les secrets
- * d'un scope avec une nouvelle clé, sans down-time.
+ * Re-chiffre progressivement les secrets d'un scope avec la NOUVELLE clé
+ * (`{ENV}_NEW`, exigée). PAS de big-bang : l'appelant itère enregistrement par
+ * enregistrement (boucle paginée dans le script). Les secrets déjà tournés
+ * (empreinte = nouvelle clé) sont sautés → le script est idempotent.
  */
-export function rotate(_kind: SecretKind): void {
-  // implémentation Phase 5A (re-chiffrement incrémental par enregistrement)
+export async function rotate(
+  kind: SecretKind,
+  targets: SecretRotationTarget[],
+  rotateAll: (encrypted: string) => Promise<string> | string,
+): Promise<SecretRotationResult> {
+  const newKey = readEnvKey(kind, "new")
+  if (!newKey) {
+    throw new Error(`${envKeyOf(kind)}_NEW manquant — rotation impossible`)
+  }
+  const fp = keyFingerprint(kind, newKey)
+  const result: SecretRotationResult = { rotated: 0, skipped: 0, failed: 0 }
+  for (const target of targets) {
+    try {
+      // Déjà tourné (empreinte de la nouvelle clé) → idempotent.
+      if (target.encrypted.startsWith(`k${fp}:`)) {
+        result.skipped += 1
+        continue
+      }
+      // Déchiffre avec la clé courante (puis "previous" en secours si basculée).
+      const plain = decrypt(kind, target.encrypted)
+      const reEncrypted = encrypt(kind, plain, newKey)
+      await rotateAll(reEncrypted)
+      result.rotated += 1
+    } catch {
+      result.failed += 1
+    }
+  }
+  return result
 }
 
 // ── Façade compat (§8 du plan) ──

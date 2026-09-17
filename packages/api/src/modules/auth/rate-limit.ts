@@ -7,9 +7,11 @@
  * Réponse de blocage uniforme : ni le statut ni le délai ne distinguent un compte
  * existant d'un compte inexistant (anti-énumération).
  *
- * Persistance en mémoire process-local — seuils par défaut jusqu'à la
- * configuration dynamique (SecurityPolicy). `clear()` sert aux tests.
+ * Persistance en mémoire process-local — seuils configurés par la politique de
+ * sécurité (5A1 : env ; 5A2 : par tenant). `clear()` sert aux tests.
  */
+
+import { securityPolicy } from "./policies/security-policy.service"
 
 export interface RateLimitConfig {
   maxFailures: number
@@ -23,6 +25,17 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   windowMs: 60_000,
   baseBackoffMs: 30_000,
   maxBackoffMs: 600_000,
+}
+
+/** Config initiale depuis la politique de sécurité (env en 5A1, tenant en 5A2). */
+function configFromPolicy(): RateLimitConfig {
+  const p = securityPolicy.getPolicy()
+  return {
+    maxFailures: p.loginFailLimit,
+    windowMs: p.loginFailWindowMs,
+    baseBackoffMs: p.rateBaseBackoffMs,
+    maxBackoffMs: p.rateMaxBackoffMs,
+  }
 }
 
 interface Bucket {
@@ -112,4 +125,4 @@ export class CompositeRateLimiter {
 }
 
 /** Instance partagée process-local, utilisée par les routes d'authentification. */
-export const authRateLimiter = new CompositeRateLimiter()
+export const authRateLimiter = new CompositeRateLimiter(configFromPolicy())

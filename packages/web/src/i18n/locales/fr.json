@@ -88,6 +88,7 @@
     "registries": "Registres",
     "secrets": "Secrets",
     "users": "Utilisateurs",
+    "providers": "Authentification",
     "settings": "Paramètres",
     "updates": "Mises à jour",
     "logout": "Déconnexion",
@@ -515,6 +516,108 @@
       "roleViewer": "viewer — lecture seule",
       "roleOperator": "operator — peut déployer/détruire",
       "roleHint": "La promotion en owner se fait après coup, explicitement, depuis la liste."
+    }
+  },
+  "providers": {
+    "pageTitle": "Authentification",
+    "pageSubtitle": "SSO (OIDC / OAuth2 / SAML) : les providers sont configurés ici, les identités externes approuvées par tenant.",
+    "tab": {
+      "providers": "Providers",
+      "pendings": "Approbations en attente"
+    },
+    "toast": {
+      "createSuccess": "Provider créé",
+      "updateSuccess": "Provider mis à jour",
+      "deleteSuccess": "Provider supprimé",
+      "testOk": "Connexion OK — config valide",
+      "testKo": "Test KO : {{message}}",
+      "enabledChanged": "Provider {{enabled}}",
+      "approveSuccess": "Identité approuvée",
+      "rejectSuccess": "Demande rejetée"
+    },
+    "list": {
+      "title": "Providers d'authentification",
+      "subtitle": "{{count}} provider(s) configuré(s)"
+    },
+    "empty": {
+      "title": "Aucun provider",
+      "description": "Ajoute un fournisseur OIDC, OAuth2 ou SAML pour l'authentification externe (Google, Keycloak, Entra…)."
+    },
+    "badge": {
+      "enabled": "actif",
+      "disabled": "inactif"
+    },
+    "actions": {
+      "new": "Nouveau provider",
+      "edit": "Modifier",
+      "test": "Tester la connexion",
+      "delete": "Supprimer",
+      "cancel": "Annuler",
+      "save": "Enregistrer"
+    },
+    "form": {
+      "titleCreate": "Nouveau provider",
+      "titleEdit": "Modifier « {{name}} »",
+      "kindLabel": "Protocole",
+      "kindOidc": "OIDC — OpenID Connect",
+      "kindOauth2": "OAuth2 — code + userinfo",
+      "kindSaml": "SAML 2.0 — IdP initié",
+      "idLabel": "Identifiant",
+      "idPlaceholder": "oidc-corp, google, keycloak…",
+      "idHint": "Référencé dans l'URL de callback. a-z, 0-9 et tirets uniquement.",
+      "nameLabel": "Nom",
+      "namePlaceholder": "Ex. Entra Corp",
+      "enabledLabel": "Activé",
+      "enabledHint": "Un provider inactif est invisible sur l'écran de connexion.",
+      "configLabel": "Configuration",
+      "secretHint": "« •••••••• » signifie : conserver la valeur actuelle (non modifiée).",
+      "requiredErrs": "Champs requis manquants ou invalides"
+    },
+    "field": {
+      "issuer": "Issuer (URL du fournisseur d'identité)",
+      "clientId": "Client ID",
+      "clientSecret": "Client secret",
+      "redirectUri": "Redirect URI (callback)",
+      "scopes": "Scopes (séparés par des espaces)",
+      "discoveryUrl": "Discovery URL (.well-known/openid-configuration)",
+      "jwksUri": "JWKS URI",
+      "authorizationUri": "URL d'autorisation",
+      "tokenUri": "URL de jeton (token)",
+      "userinfoUri": "URL userinfo",
+      "groupAttr": "Attribut de groupe (optionnel)",
+      "idpCert": "Certificat X.509 de l'IdP (PEM)",
+      "idpIssuer": "Issuer de l'IdP",
+      "spIssuer": "Issuer de ta SP",
+      "entryPoint": "Entry point (ACS)",
+      "callbackUrl": "Callback URL",
+      "audience": "Audience (optionnel)",
+      "acceptedClockSkewMs": "Dérive d'horloge autorisée (ms, optionnel)"
+    },
+    "test": {
+      "running": "Test en cours…"
+    },
+    "deleteConfirm": {
+      "title": "Supprimer ce provider ?",
+      "description": "« {{name}} » sera retiré immédiatement. Les comptes déjà fédérés restent actifs ; plus aucune nouvelle connexion via ce provider."
+    },
+    "pendings": {
+      "title": "Identités en attente d'approbation",
+      "subtitle": "{{count}} demande(s) — aucun compte n'est créé tant que tu n'approuves pas.",
+      "empty": {
+        "title": "Aucune demande en attente",
+        "description": "Un utilisateur d'un IdP non référencé apparaîtra ici pour approbation."
+      },
+      "emailUnknown": "email inconnu",
+      "approve": "Approuver",
+      "reject": "Rejeter",
+      "approveTitle": "Approuver « {{email}} »",
+      "approveDesc": "Le compte sera créé (ou rattaché si l'email existe déjà) au tenant et au rôle choisis.",
+      "tenantLabel": "Tenant de rattachement",
+      "roleLabel": "Rôle",
+      "rejectTitle": "Rejeter cette demande ?",
+      "rejectDesc": "« {{email}} » restera en attente refusée. Il pourra se représenter via l'IdP.",
+      "reasonLabel": "Motif (optionnel)",
+      "roleHint": "Le rôle accordé vit sur la Membership de ce tenant."
     }
   },
   "settings": {

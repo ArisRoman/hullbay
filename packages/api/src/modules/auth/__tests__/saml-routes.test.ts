@@ -11,9 +11,9 @@ const SP_ISSUER = "https://sp.example.org/saml/me"
 const IDP_ISSUER = "https://idp.example.org/realms/test"
 
 vi.mock("../../../lib/prisma", () => ({ prisma: {} }))
-const emitMock = vi.fn(() => Promise.resolve(undefined))
+const emitMock = vi.fn((_event: string, _data?: Record<string, unknown>) => Promise.resolve(undefined))
 vi.mock("../../../lib/event-bus", () => ({
-  eventBus: { on: () => {}, emit: (...args: unknown[]) => emitMock(...args) },
+  eventBus: { on: () => {}, emit: (...args: [string, Record<string, unknown>?]) => emitMock(...args) },
 }))
 
 async function buildApp() {

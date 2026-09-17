@@ -13,18 +13,22 @@ export interface TotpEnrollment {
   secret: string
 }
 
-export function startTotpEnrollment(
-  issuer: string,
-  label: string,
-): TotpEnrollment {
-  const secret = otplibGenerateSecret({ length: 20 })
-  const otpauth = generateURI({
+/** Construit l'URI otpauth:// à partir d'un secret existant (pas de régénération). */
+export function totpUri(issuer: string, label: string, secret: string): string {
+  return generateURI({
     strategy: "totp",
     issuer,
     label,
     secret,
   })
-  return { otpauth, secret }
+}
+
+export function startTotpEnrollment(
+  issuer: string,
+  label: string,
+): TotpEnrollment {
+  const secret = otplibGenerateSecret({ length: 20 })
+  return { otpauth: totpUri(issuer, label, secret), secret }
 }
 
 /**

@@ -17,7 +17,9 @@
  */
 
 import { prisma } from "../../../lib/prisma"
+import { eventBus } from "../../../lib/event-bus"
 import type { ExternalIdentity } from "../providers/types"
+import { AUTH_AUDIT_EVENTS } from "../audit-events"
 
 export interface ResolvedIdentity {
   userId: string
@@ -67,6 +69,13 @@ export async function resolveIdentity(
         email: identity.email,
         name: identity.name,
       },
+    })
+    // Notifie le workflow d'approbation (5A1 — subscriber on-deploy-finished).
+    // Fire-and-forget : la création de pending ne doit pas dépendre de l'audit.
+    await eventBus.emit(AUTH_AUDIT_EVENTS.pendingCreated, {
+      providerId: identity.providerId,
+      email: identity.email ?? null,
+      subject: identity.subject,
     })
   }
 

@@ -185,6 +185,38 @@ export const api = {
   deleteUser: (id: string) =>
     req<{ ok: true }>(`/api/users/${id}`, { method: "DELETE" }),
 
+  // Providers d'authentification + approbations (owner uniquement), Phase 5A1.
+  listAdminProviders: () => req<AuthProviderAdmin[]>("/api/auth/admin/providers"),
+  createAdminProvider: (data: AuthProviderUpsert) =>
+    req<AuthProviderAdmin>("/api/auth/admin/providers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateAdminProvider: (id: string, data: Partial<Omit<AuthProviderUpsert, "kind" | "id">>) =>
+    req<AuthProviderAdmin>(`/api/auth/admin/providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteAdminProvider: (id: string) =>
+    req<{ ok: true }>(`/api/auth/admin/providers/${id}`, { method: "DELETE" }),
+  testAdminProvider: (id: string) =>
+    req<ProviderTestResult>(`/api/auth/admin/providers/${id}/test`, {
+      method: "POST",
+    }),
+  listAdminPendings: () => req<PendingIdentity[]>("/api/auth/admin/pendings"),
+  approveAdminPending: (id: string, target: ApproveTarget) =>
+    req<{ ok: boolean; message: string }>(`/api/auth/admin/pendings/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify(target),
+    }),
+  rejectAdminPending: (id: string, reason?: string) =>
+    req<{ ok: boolean; message: string }>(`/api/auth/admin/pendings/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  listTenants: () =>
+    req<Tenant[]>("/api/auth/admin/tenants"),
+
   // Journal d'audit (operator+)
   audit: (
     params: { limit?: number; offset?: number; action?: string } = {},
@@ -434,6 +466,58 @@ export type UserAccount = {
   role: string;
   mfaEnabled: boolean;
   createdAt: string;
+};
+
+/** Provider vu de l'admin (owner) : config en clair SAUF champs sensibles,
+ *  masqués par marqueur par le backend (jamais la valeur du secret). */
+export type AuthProviderAdmin = {
+  id: string;
+  kind: "oidc" | "oauth2" | "saml";
+  name: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+};
+
+/** Marqueur de présence côté API : envoyer sur un champ sensible en PUT
+ *  signifie "conserver la valeur actuelle" (ne jamais écraser). */
+export const SECRET_MASK = "••••••••";
+
+export type AuthProviderUpsert = {
+  id?: string;
+  kind: "oidc" | "oauth2" | "saml";
+  name: string;
+  enabled?: boolean;
+  config: Record<string, unknown>;
+};
+
+export type ProviderTestResult = {
+  ok: boolean;
+  message?: string;
+  connectivity?: string | null;
+  details?: unknown;
+};
+
+export type PendingIdentity = {
+  id: string;
+  providerId: string;
+  issuer: string | null;
+  subject: string;
+  email: string | null;
+  name: string | null;
+  requestedForTenantId: string | null;
+  status: string;
+  createdAt: string;
+};
+
+export type Tenant = {
+  id: string;
+  name: string;
+  slug: string;
+};
+
+export type ApproveTarget = {
+  tenantId: string;
+  role: "owner" | "operator" | "viewer";
 };
 
 export type AuditEntry = {

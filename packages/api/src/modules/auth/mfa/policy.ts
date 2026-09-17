@@ -1,10 +1,12 @@
 /**
- * Politique MFA (stub Phase 2 → effectif Phase 5A).
+ * Politique MFA (Phase 2 : stub local → Phase 5A1 : effectif sur le rôle).
  * Règle du plan §10 : une MFA fournie par l'IdP SSO ne doit PAS imposer une 2e MFA
- * locale, SAUF si SecurityPolicy.mfaRequireRoles l'exige (rôle concerné). En Phase 2,
- * le modèle SecurityPolicy n'existe pas encore (Phase 5A) : le stub impose la MFA
- * locale uniquement pour les comptes de type "local".
+ * locale, SAUF si SecurityPolicy.mfaRequireRoles l'exige (rôle concerné).
+ * En 5A2, la politique est persistée par tenant (modèle SecurityPolicy) — le
+ * singleton lit l'env jusqu'à ce que le chargement tenant soit branché.
  */
+
+import { securityPolicy } from "../policies/security-policy.service"
 
 export interface MfaDecision {
   requireLocalMfa: boolean
@@ -15,10 +17,14 @@ export function shouldRequireLocalMfa(input: {
   providerKind: string
   role?: string
 }): MfaDecision {
-  // Phase 5A : lire SecurityPolicy.mfaRequireRoles et décider selon le rôle.
-  // Phase 2 : règle simple — tout compte local exige TOTP ; SSO (oidc/saml/ldap) = non.
-  if (input.providerKind !== "local") {
-    return { requireLocalMfa: false, reason: "mfa-idp-fournie" }
+  // Compte local : TOTP imposé (règle de base, inchangée).
+  if (input.providerKind === "local") {
+    return { requireLocalMfa: true, reason: "compte-local" }
   }
-  return { requireLocalMfa: true, reason: "compte-local" }
+  // SSO : pas de 2e MFA locale SAUF rôle ciblé par la politique.
+  const { mfaRequireRoles } = securityPolicy.getPolicy()
+  if (input.role && mfaRequireRoles.includes(input.role.toLowerCase())) {
+    return { requireLocalMfa: true, reason: "mfa-role-exige-mfa-locale" }
+  }
+  return { requireLocalMfa: false, reason: "mfa-idp-fournie" }
 }

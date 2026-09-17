@@ -22,6 +22,9 @@ export { registerAuthGuard } from "./routes/guard"
 export { registerAuthRoutes } from "./routes/auth.routes"
 export { registerSsoRoutes } from "./routes/sso.routes"
 export { registerSamlRoutes } from "./routes/saml.routes"
+export { registerProvidersRoutes } from "./routes/providers.routes"
+export { registerPendingRoutes } from "./routes/pending.routes"
 
 // Provider registry
 export { providerRegistry } from "./registry/provider-registry"
+export { syncProviderSeedsToDb } from "./registry/provider-db"

@@ -472,12 +472,13 @@ describe("Auth Routes", () => {
             });
 
             expect(response.statusCode).toBe(200);
-            expect(response.json()).toEqual({
-                id: "owner-id",
-                email: "fotetsa@gmail.com",
-                role: "owner",
-                mfaEnabled: true,
-            });
+             expect(response.json()).toEqual({
+                 id: "owner-id",
+                 email: "fotetsa@gmail.com",
+                 role: "owner",
+                 mfaEnabled: true,
+                 mfaRequired: false,
+             });
         });
 
         it("devrait retourner 401 sans token", async () => {

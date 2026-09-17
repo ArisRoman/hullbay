@@ -30,6 +30,13 @@ const AUDITED: Record<string, string> = {
   "auth.mfa.failed": "auth.mfa.failed",
   "auth.password.changed": "auth.password.changed",
   "auth.saml.failed": "auth.saml.failed",
+  // Phase 5A1 — CRUD providers + approbation des identités externes.
+  "auth.provider.created": "auth.provider.created",
+  "auth.provider.updated": "auth.provider.updated",
+  "auth.provider.deleted": "auth.provider.deleted",
+  "auth.pending.created": "auth.pending.created",
+  "auth.pending.approved": "auth.pending.approved",
+  "auth.pending.rejected": "auth.pending.rejected",
 }
 
 export function registerDeploySubscribers(): void {

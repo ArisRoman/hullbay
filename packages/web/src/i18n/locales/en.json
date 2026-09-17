@@ -88,6 +88,7 @@
     "registries": "Registries",
     "secrets": "Secrets",
     "users": "Users",
+    "providers": "Authentication",
     "settings": "Settings",
     "updates": "Updates",
     "logout": "Logout",
@@ -515,6 +516,108 @@
       "roleViewer": "viewer — read-only",
       "roleOperator": "operator — can deploy/destroy",
       "roleHint": "Promotion to owner is done afterwards, explicitly from the list."
+    }
+  },
+  "providers": {
+    "pageTitle": "Authentication",
+    "pageSubtitle": "SSO (OIDC / OAuth2 / SAML): configure providers here, approve external identities per tenant.",
+    "tab": {
+      "providers": "Providers",
+      "pendings": "Pending approvals"
+    },
+    "toast": {
+      "createSuccess": "Provider created",
+      "updateSuccess": "Provider updated",
+      "deleteSuccess": "Provider deleted",
+      "testOk": "Connection OK — valid config",
+      "testKo": "Test failed: {{message}}",
+      "enabledChanged": "Provider {{enabled}}",
+      "approveSuccess": "Identity approved",
+      "rejectSuccess": "Request rejected"
+    },
+    "list": {
+      "title": "Authentication providers",
+      "subtitle": "{{count}} provider(s) configured"
+    },
+    "empty": {
+      "title": "No provider",
+      "description": "Add an OIDC, OAuth2 or SAML provider for external authentication (Google, Keycloak, Entra…)."
+    },
+    "badge": {
+      "enabled": "active",
+      "disabled": "inactive"
+    },
+    "actions": {
+      "new": "New provider",
+      "edit": "Edit",
+      "test": "Test connection",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "form": {
+      "titleCreate": "New provider",
+      "titleEdit": "Edit “{{name}}”",
+      "kindLabel": "Protocol",
+      "kindOidc": "OIDC — OpenID Connect",
+      "kindOauth2": "OAuth2 — code + userinfo",
+      "kindSaml": "SAML 2.0 — IdP initiated",
+      "idLabel": "Identifier",
+      "idPlaceholder": "oidc-corp, google, keycloak…",
+      "idHint": "Referenced in the callback URL. a-z, 0-9 and dashes only.",
+      "nameLabel": "Name",
+      "namePlaceholder": "e.g. Entra Corp",
+      "enabledLabel": "Enabled",
+      "enabledHint": "An inactive provider is hidden from the sign-in screen.",
+      "configLabel": "Configuration",
+      "secretHint": "“••••••••” means: keep the current value (unchanged).",
+      "requiredErrs": "Missing or invalid required fields"
+    },
+    "field": {
+      "issuer": "Issuer (identity provider URL)",
+      "clientId": "Client ID",
+      "clientSecret": "Client secret",
+      "redirectUri": "Redirect URI (callback)",
+      "scopes": "Scopes (space-separated)",
+      "discoveryUrl": "Discovery URL (.well-known/openid-configuration)",
+      "jwksUri": "JWKS URI",
+      "authorizationUri": "Authorization URL",
+      "tokenUri": "Token URL",
+      "userinfoUri": "Userinfo URL",
+      "groupAttr": "Group attribute (optional)",
+      "idpCert": "IdP X.509 certificate (PEM)",
+      "idpIssuer": "IdP issuer",
+      "spIssuer": "Your SP issuer",
+      "entryPoint": "Entry point (ACS)",
+      "callbackUrl": "Callback URL",
+      "audience": "Audience (optional)",
+      "acceptedClockSkewMs": "Allowed clock skew (ms, optional)"
+    },
+    "test": {
+      "running": "Testing…"
+    },
+    "deleteConfirm": {
+      "title": "Delete this provider?",
+      "description": "“{{name}}” will be removed immediately. Already-federated accounts stay active; no new sign-in via this provider."
+    },
+    "pendings": {
+      "title": "Identities waiting for approval",
+      "subtitle": "{{count}} request(s) — no account is created until you approve.",
+      "empty": {
+        "title": "Nothing waiting",
+        "description": "A user from an unknown IdP will show up here for approval."
+      },
+      "emailUnknown": "unknown email",
+      "approve": "Approve",
+      "reject": "Reject",
+      "approveTitle": "Approve “{{email}}”",
+      "approveDesc": "The account will be created (or attached if the email already exists) in the chosen tenant and role.",
+      "tenantLabel": "Target tenant",
+      "roleLabel": "Role",
+      "rejectTitle": "Reject this request?",
+      "rejectDesc": "“{{email}}” will stay in rejected state. They can sign in again via the IdP.",
+      "reasonLabel": "Reason (optional)",
+      "roleHint": "The granted role lives on this tenant's Membership."
     }
   },
   "settings": {

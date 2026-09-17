@@ -3,8 +3,12 @@ import { useNavigate } from "react-router-dom"
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from "@tanstack/react-query"
 import { api, auth } from "../lib/api"
+import { useMe } from "../lib/useMe"
 import { Button, Container, Heading, Input, Label, Text, toast } from "@medusajs/ui"
 import { QRCodeSVG } from "qrcode.react"
+
+// Un seul appel d'enrôlement, même en StrictMode (double mount dev).
+let enrollStarted = false
 
 export function ActivateMfaPage() {
   const { t } = useTranslation()
@@ -15,8 +19,14 @@ export function ActivateMfaPage() {
   const [code, setCode] = useState("")
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
+  const { me } = useMe()
+
+  // Une navigation directe n'a de sens que si la MFA locale est requise.
+  useEffect(() => { if (me && !me.mfaRequired) navigate("/", { replace: true }) }, [me])
 
   useEffect(() => {
+    if (enrollStarted) return
+    enrollStarted = true
     let mounted = true
     async function start() {
       try {
