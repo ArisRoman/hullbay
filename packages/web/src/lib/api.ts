@@ -165,6 +165,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+  listSessions: () =>
+    req<{ sessions: { id: string; jti: string; providerId: string; createdAt: string; expiresAt: string; lastSeenAt: string; ip: string | null; userAgent: string | null; current: boolean }[] }>("/api/auth/sessions"),
+  revokeSession: (jti: string) =>
+    req<void>(`/api/auth/sessions/${jti}`, { method: "DELETE" }),
 
   // Utilisateurs (owner uniquement)
   listUsers: () => req<UserAccount[]>("/api/users"),

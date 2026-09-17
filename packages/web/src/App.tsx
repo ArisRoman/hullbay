@@ -14,6 +14,7 @@ import { MeProvider, useMe } from "./lib/useMe"
 import { ProjectsPage } from "./pages/ProjectsPage"
 import { CanvasPage } from "./pages/CanvasPage"
 import { SettingsPage } from "./pages/SettingsPage"
+import { SessionsPage } from "./pages/SessionsPage"
 import { AdminProvidersPage } from "./pages/AdminProvidersPage"
 import { ServersPage } from "./pages/ServersPage"
 import { IntegrationsPage } from "./pages/IntegrationsPage"
@@ -55,6 +56,7 @@ export function App() {
             <Route path="/secrets" element={<SecretsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/providers" element={<AdminProvidersPage />} />
+            <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/updates" element={<UpdatesPage />} />

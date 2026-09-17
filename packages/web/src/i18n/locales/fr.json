@@ -89,6 +89,7 @@
     "secrets": "Secrets",
     "users": "Utilisateurs",
     "providers": "Authentification",
+    "sessions": "Appareils",
     "settings": "Paramètres",
     "updates": "Mises à jour",
     "logout": "Déconnexion",
@@ -532,6 +533,7 @@
       "testOk": "Connexion OK — config valide",
       "testKo": "Test KO : {{message}}",
       "enabledChanged": "Provider {{enabled}}",
+      "lastActiveProvider": "Impossible de désactiver : au moins un provider doit rester actif",
       "approveSuccess": "Identité approuvée",
       "rejectSuccess": "Demande rejetée"
     },
@@ -562,6 +564,8 @@
       "kindOidc": "OIDC — OpenID Connect",
       "kindOauth2": "OAuth2 — code + userinfo",
       "kindSaml": "SAML 2.0 — IdP initié",
+      "kindLocal": "Local — comptes internes",
+      "kindLdap": "LDAP — annuaire d'entreprise",
       "idLabel": "Identifiant",
       "idPlaceholder": "oidc-corp, google, keycloak…",
       "idHint": "Référencé dans l'URL de callback. a-z, 0-9 et tirets uniquement.",
@@ -571,6 +575,7 @@
       "enabledHint": "Un provider inactif est invisible sur l'écran de connexion.",
       "configLabel": "Configuration",
       "secretHint": "« •••••••• » signifie : conserver la valeur actuelle (non modifiée).",
+      "configUnsupported": "La configuration de ce protocole n'est pas modifiable ici. Seuls le nom et l'état peuvent être modifiés.",
       "requiredErrs": "Champs requis manquants ou invalides"
     },
     "field": {
@@ -618,6 +623,30 @@
       "rejectDesc": "« {{email}} » restera en attente refusée. Il pourra se représenter via l'IdP.",
       "reasonLabel": "Motif (optionnel)",
       "roleHint": "Le rôle accordé vit sur la Membership de ce tenant."
+    }
+  },
+  "sessions": {
+    "pageTitle": "Appareils connectés",
+    "pageSubtitle": "Sessions actives sur ton compte. Révoque tout appareil que tu ne reconnais pas.",
+    "empty": {
+      "title": "Aucun appareil connecté",
+      "description": "Les sessions apparaissent ici après connexion."
+    },
+    "table": {
+      "device": "Appareil",
+      "ip": "Adresse IP",
+      "lastSeen": "Dernière activité",
+      "expiresAt": "Expire le",
+      "actions": "Actions"
+    },
+    "unknownDevice": "Appareil inconnu",
+    "current": "Cet appareil",
+    "revoke": "Révoquer",
+    "revoked": "Session révoquée",
+    "confirm": {
+      "title": "Révoquer cet appareil ?",
+      "description": "La session sera immédiatement invalidée. L'appareil devra se reconnecter.",
+      "currentDescription": "C'est ta session courante : tu seras déconnecté immédiatement."
     }
   },
   "settings": {

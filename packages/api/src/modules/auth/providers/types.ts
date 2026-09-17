@@ -74,6 +74,8 @@ export type AuthErrorCode =
 export class AuthError extends Error {
   code: AuthErrorCode
   status: number
+  /** UserId résolu quand un échec concerne un compte existant (audit corrélé). */
+  userId?: string
 
   constructor(code: AuthErrorCode, message: string, status = 400) {
     super(message)

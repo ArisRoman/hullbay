@@ -50,11 +50,25 @@ export interface RateLimitDecision {
 }
 
 export class CompositeRateLimiter {
-  private readonly config: RateLimitConfig
+  private readonly configSource: () => RateLimitConfig
   private buckets = new Map<string, Bucket>()
 
-  constructor(config: Partial<RateLimitConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config }
+  /**
+   * `config` peut être un objet statique (tests) ou un provider relu à chaque
+   * appel — indispensable pour que les changements de politique (5A2, par
+   * tenant) s'appliquent sans redémarrage.
+   */
+  constructor(config: Partial<RateLimitConfig> | (() => Partial<RateLimitConfig>) = {}) {
+    if (typeof config === "function") {
+      this.configSource = () => ({ ...DEFAULT_CONFIG, ...config() })
+    } else {
+      const staticConfig = { ...DEFAULT_CONFIG, ...config }
+      this.configSource = () => staticConfig
+    }
+  }
+
+  private config(): RateLimitConfig {
+    return this.configSource()
   }
 
   keyFor(ip: string, endpoint: string, account?: string): string {
@@ -80,18 +94,19 @@ export class CompositeRateLimiter {
    */
   recordFailure(key: string): void {
     this.evict()
+    const config = this.config()
     const now = Date.now()
     let bucket = this.buckets.get(key)
     if (!bucket) {
-      bucket = { failures: [], blockedUntil: 0, backoffMs: this.config.baseBackoffMs }
+      bucket = { failures: [], blockedUntil: 0, backoffMs: config.baseBackoffMs }
       this.buckets.set(key, bucket)
     }
     if (bucket.blockedUntil > now) return
     bucket.failures.push(now)
-    bucket.failures = bucket.failures.filter((t) => now - t < this.config.windowMs)
-    if (bucket.failures.length >= this.config.maxFailures) {
+    bucket.failures = bucket.failures.filter((t) => now - t < config.windowMs)
+    if (bucket.failures.length >= config.maxFailures) {
       bucket.blockedUntil = now + bucket.backoffMs
-      bucket.backoffMs = Math.min(bucket.backoffMs * 2, this.config.maxBackoffMs)
+      bucket.backoffMs = Math.min(bucket.backoffMs * 2, config.maxBackoffMs)
       bucket.failures = []
     }
   }
@@ -115,7 +130,8 @@ export class CompositeRateLimiter {
   private evict(): void {
     if (this.buckets.size < 4096) return
     const now = Date.now()
-    const stale = this.config.windowMs + this.config.maxBackoffMs
+    const config = this.config()
+    const stale = config.windowMs + config.maxBackoffMs
     for (const [key, bucket] of this.buckets) {
       const lastActivity =
         bucket.failures[bucket.failures.length - 1] ?? bucket.blockedUntil
@@ -125,4 +141,4 @@ export class CompositeRateLimiter {
 }
 
 /** Instance partagée process-local, utilisée par les routes d'authentification. */
-export const authRateLimiter = new CompositeRateLimiter(configFromPolicy())
+export const authRateLimiter = new CompositeRateLimiter(configFromPolicy)

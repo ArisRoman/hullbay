@@ -46,4 +46,20 @@ describe("UserSessionStore", () => {
       expect.objectContaining({ code: "mfa_token_invalid" }),
     )
   })
+
+  it("revoke invalide immédiatement le token (fast-path cache compris)", async () => {
+    const token = store.signSession("u-1", "owner", true)
+    const { jti } = jwksService.verifyToken(token) as { jti: string }
+    await store.revoke(jti)
+    expect(() => store.verifySession(token)).toThrow("session révoquée")
+  })
+
+  it("revoke d'une session n'affecte pas les autres sessions de l'utilisateur", async () => {
+    const tokenA = store.signSession("u-1", "owner", true)
+    const tokenB = store.signSession("u-1", "owner", true)
+    const { jti } = jwksService.verifyToken(tokenA) as { jti: string }
+    await store.revoke(jti)
+    expect(() => store.verifySession(tokenA)).toThrow()
+    expect(store.verifySession(tokenB).sub).toBe("u-1")
+  })
 })

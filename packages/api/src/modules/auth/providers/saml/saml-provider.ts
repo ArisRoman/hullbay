@@ -40,6 +40,8 @@ const STATE_TTL_MS = 10 * 60 * 1000
 export interface SamlProviderOptions {
   id: string
   enabled: boolean
+  /** Nom d'affichage (colonne AuthProvider.name) ; défaut = host de l'entryPoint. */
+  name?: string
   /** Certificat X.509 PEM de l'IdP (utilisé pour valider la signature). */
   idpCert: string
   /** Entity ID du fournisseur d'identité (iss) — comparé au issuer de l'assertion. */
@@ -94,7 +96,7 @@ export class SamlProvider implements AuthProviderContract {
     return {
       id: this.id,
       kind: "saml",
-      name: host,
+      name: this.options.name?.trim() || host,
       enabled: this.enabled,
     }
   }

@@ -15,6 +15,13 @@ coverage/
 !.env.template
 packagesapi.env
 
+# JWKS keyring (clé privée de signature locale) + sauvegardes corrompues
+packages/api/data/
+/data/
+.jwks-keyring.json
+**/jwks-keyring.json*
+**/*.jwks-keyring.json.corrupt-*
+
 # Prisma
 packages/api/prisma/*.db
 packages/api/prisma/migrations/dev.db*

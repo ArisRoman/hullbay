@@ -204,6 +204,28 @@ describe("Providers admin (owner) — CRUD", () => {
     await app.close()
   })
 
+  it("PUT — enabled uniquement (toggle) réussit et change le statut sans toucher la config", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false,
+      config: { issuer: "https://idp.example.org", clientSecret: "k9988:iv:tag:data" },
+    } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { enabled: true },
+    })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.authProvider.update).mock.calls[0]?.[0] as { data: Record<string, unknown> }
+    expect(call.data.enabled).toBe(true)
+    expect(call.data.config).toBeUndefined()
+    await app.close()
+  })
+
   it("DELETE — provider local impossible", async () => {
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ id: "local", kind: "local" } as never)
     const app = await buildApp()

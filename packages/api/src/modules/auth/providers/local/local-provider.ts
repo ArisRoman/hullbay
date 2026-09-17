@@ -43,8 +43,11 @@ export class LocalProvider implements AuthProviderContract {
       throw new AuthError("invalid_credentials", "identifiants invalides", 401)
     }
 
+    // Lookup insensible à la casse : cohérent avec la clé de rate-limit
+    // (elle-même lowercodée) et évite le contournement par rotation de casse
+    // (User@X vs user@x sur le même compte).
     const identity = await prisma.authIdentity.findFirst({
-      where: { kind: "local", email: input.email },
+      where: { kind: "local", email: { equals: input.email.trim(), mode: "insensitive" } },
       include: { user: { select: { id: true, role: true } } },
     })
 
@@ -53,7 +56,11 @@ export class LocalProvider implements AuthProviderContract {
       : verifyPassword(input.password, DUMMY_HASH)
 
     if (!identity || !valid) {
-      throw new AuthError("invalid_credentials", "identifiants invalides", 401)
+      // userId renseigné uniquement si le compte existe (audit corrélé), sans
+      // changer la réponse renvoyée au client (anti-énumération).
+      const err = new AuthError("invalid_credentials", "identifiants invalides", 401)
+      if (identity) err.userId = identity.userId
+      throw err
     }
 
     // lastLoginAt : fire-and-forget, on n'échoue pas sur cette mise à jour

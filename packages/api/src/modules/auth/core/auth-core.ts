@@ -41,17 +41,19 @@ async function getUser(userId: string) {
 // ── Opérations publiques ──
 
 export async function createOwner(email: string, password: string) {
-  const existing = await prisma.user.findFirst({ where: { role: "owner" } })
-  if (existing) throw new Error("un compte owner existe déjà")
-
   const tenant = await ensureDefaultTenant()
 
-  return prisma.$transaction(async () => {
-    const user = await prisma.user.create({
+  return prisma.$transaction(async (tx) => {
+    // Vérification DANS la transaction : réduit la fenêtre de course entre
+    // deux bootstraps concurrents (l'unicité de fait reste le 1er owner créé).
+    const existing = await tx.user.findFirst({ where: { role: "owner" } })
+    if (existing) throw new Error("un compte owner existe déjà")
+
+    const user = await tx.user.create({
       data: { email, role: "owner" },
     })
 
-    await prisma.authIdentity.create({
+    await tx.authIdentity.create({
       data: {
         userId: user.id,
         providerId: "local",
@@ -64,7 +66,7 @@ export async function createOwner(email: string, password: string) {
       },
     })
 
-    await prisma.membership.create({
+    await tx.membership.create({
       data: { userId: user.id, tenantId: tenant.id, role: "owner" },
     })
 
@@ -80,7 +82,7 @@ export async function login(email: string, password: string) {
     result = await provider.authenticate({ kind: "local", email, password })
   } catch (err) {
     if (err instanceof AuthError && err.code === "invalid_credentials") {
-      trace(AUTH_AUDIT_EVENTS.loginFailed, { email })
+      trace(AUTH_AUDIT_EVENTS.loginFailed, { email, userId: err.userId })
       throw err
     }
     throw err
@@ -103,7 +105,9 @@ export async function verifyMfa(pendingToken: string, code: string) {
 
   const identity = await findLocalIdentityByUserId(sub)
   if (!identity?.mfaSecretEnc) {
-    throw new AuthError("mfa_not_configured", "MFA non configurée", 400)
+    // 401 (et non 400) : pas d'oracle distinguant « MFA non configurée » d'un
+    // code invalide pour un porteur de pendingToken.
+    throw new AuthError("mfa_not_configured", "MFA non configurée", 401)
   }
 
   const { decryptSecret } = await import("../secrets/secret-encryption-service")
@@ -168,6 +172,8 @@ export async function confirmMfaEnrollment(userId: string, code: string) {
     where: { id: identity.id },
     data: { mfaEnabled: true },
   })
+
+  trace(AUTH_AUDIT_EVENTS.mfaEnabled, { userId })
 
   const user = await getUser(userId)
   return { ok: true, token: sessionManager.signSession(userId, user.role, true) }
@@ -254,10 +260,10 @@ export async function setRole(userId: string, role: Role) {
   const tenant = await ensureDefaultTenant()
   // Atomicité : user.role et membership.role changent ENSEMBLE ou pas du tout
   // (sinon un crash entre les deux writes laissait un état miroir incohérent).
-  return prisma.$transaction(async () => {
-    const u = await prisma.user.update({ where: { id: userId }, data: { role } })
+  return prisma.$transaction(async (tx) => {
+    const u = await tx.user.update({ where: { id: userId }, data: { role } })
 
-    await prisma.membership.updateMany({
+    await tx.membership.updateMany({
       where: { userId, tenantId: tenant.id },
       data: { role },
     })

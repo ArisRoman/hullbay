@@ -17,6 +17,7 @@ import {
   Sparkles,
   DecisionProcess,
   ShieldCheck,
+  ComputerDesktop,
 } from "@medusajs/icons";
 import { api, auth } from "../lib/api"
 import { useMe, type Role } from "../lib/useMe"
@@ -43,6 +44,7 @@ const NAV: NavItem[] = [
   { to: "/providers", labelKey: "nav.providers", Icon: ShieldCheck, min: "owner" },
   { to: "/updates", labelKey: "nav.updates", Icon: ArrowPath, min: "owner" },
   { to: "/settings", labelKey: "nav.settings", Icon: CogSixTooth, min: "viewer" },
+  { to: "/sessions", labelKey: "nav.sessions", Icon: ComputerDesktop, min: "viewer" },
 ]
 
 /**

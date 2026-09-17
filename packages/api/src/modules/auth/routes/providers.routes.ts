@@ -195,6 +195,20 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const row = await prisma.authProvider.findUnique({ where: { id } })
       if (!row) return reply.code(404).send({ error: "provider introuvable" })
 
+      // Garde anti-lockout : on ne peut jamais désactiver le dernier provider
+      // actif (plus aucun moyen de connecter un compte ⇒ verrouillage total).
+      if (body.enabled === false && row.enabled) {
+        const otherEnabled = await prisma.authProvider.count({
+          where: { id: { not: id }, enabled: true },
+        })
+        if (otherEnabled === 0) {
+          return reply.code(400).send({
+            error: "au moins un provider doit rester actif",
+            code: "last_active_provider",
+          })
+        }
+      }
+
       const schema = kindToSchema(row.kind)
       const currentConfig = (row.config as Record<string, unknown>) ?? {}
       let encryptedConfig = currentConfig
@@ -248,10 +262,21 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string }
-      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true } })
+      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, enabled: true } })
       if (!row) return reply.code(404).send({ error: "provider introuvable" })
       if (row.id === "local") {
         return reply.code(400).send({ error: "le provider local ne peut pas être supprimé" })
+      }
+      if (row.enabled) {
+        const otherEnabled = await prisma.authProvider.count({
+          where: { id: { not: id }, enabled: true },
+        })
+        if (otherEnabled === 0) {
+          return reply.code(400).send({
+            error: "au moins un provider doit rester actif",
+            code: "last_active_provider",
+          })
+        }
       }
       const identities = await prisma.authIdentity.count({ where: { providerId: id } })
       if (identities > 0) {

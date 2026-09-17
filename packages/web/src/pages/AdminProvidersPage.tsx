@@ -26,7 +26,7 @@ import { useTranslation } from "react-i18next"
 import { Navigate } from "react-router-dom"
 import {
   api,
-  SECRET_MASK,
+  type ApiError,
   type AuthProviderAdmin,
   type AuthProviderUpsert,
   type PendingIdentity,
@@ -35,9 +35,6 @@ import { useMe } from "../lib/useMe"
 import { useMutationToast } from "../lib/useMutationToast"
 import { useConfirmDelete } from "../lib/useConfirmDelete"
 import { PageContainer, PageHeader } from "../components/PageHeader"
-import { ActionMenu } from "../components/ActionMenu"
-import { EmptyState } from "../components/EmptyState"
-import { ListContainer, ListRow } from "../components/ListContainer"
 import { ModalForm } from "../components/ModalForm"
 import { ToggleSwitch } from "../components/ToggleSwitch"
 
@@ -45,14 +42,22 @@ type Kind = "oidc" | "oauth2" | "saml"
 
 const KINDS: Kind[] = ["oidc", "oauth2", "saml"]
 
-const KIND_COLOR: Record<Kind, "blue" | "purple" | "orange"> = {
-  oidc: "blue",
-  oauth2: "purple",
-  saml: "orange",
+type BadgeColor = "green" | "red" | "blue" | "orange" | "purple" | "grey"
+
+const KIND_BADGE: Record<string, { color: BadgeColor; icon: string }> = {
+  oidc: { color: "blue", icon: "OIDC" },
+  oauth2: { color: "purple", icon: "OAuth2" },
+  saml: { color: "orange", icon: "SAML" },
+  local: { color: "grey", icon: "Local" },
+  ldap: { color: "green", icon: "LDAP" },
 }
 
-/** Champs de config exposés par le formulaire, par protocole (whitelist côté
- *  API — ici on reflète les schémas zod du backend sans rien ajouter). */
+/** Protocoles dont la config est éditable/testable via l'API (cf. backend kindToSchema). */
+const isManagedKind = (kind: string): kind is Kind => (KINDS as string[]).includes(kind)
+
+/** Champs de config d'un kind ; vide si le protocole n'est pas géré par l'API. */
+const fieldsFor = (kind: string): FieldDef[] => (isManagedKind(kind) ? CONFIG_FIELDS[kind] : [])
+
 type FieldDef = {
   key: string
   labelKey: string
@@ -91,9 +96,8 @@ const CONFIG_FIELDS: Record<Kind, FieldDef[]> = {
   ],
 }
 
-/** Draft d'un formulaire create/edit (config : string|number brut du form). */
 type Draft = {
-  kind: Kind
+  kind: string
   name: string
   id: string
   enabled: boolean
@@ -119,14 +123,13 @@ function draftFrom(provider: AuthProviderAdmin): Draft {
  * Onglet Providers : CRUD des providers SSO (OIDC/OAuth2/SAML) + test de
  * connexion ; onglet Pendings : approbation des identités externes par tenant.
  *
- * Le backend masque les secrets (jamais renvoyés) ; le marqueur "••••••••"
- * envoyé en PUT conserve la valeur actuelle.
+ * Design : tab pills custom (Updates page pattern) + cards en bordure arrondie.
  */
 export function AdminProvidersPage() {
   const { t } = useTranslation()
   const { me, can } = useMe()
 
-  const [tab, setTab] = useState<"providers" | "pendings">("providers")
+  const [activeTab, setActiveTab] = useState<"providers" | "pendings">("providers")
 
   const providers = useQuery({
     queryKey: ["admin", "providers"],
@@ -167,11 +170,9 @@ export function AdminProvidersPage() {
     setEditing(null)
   }
 
-  /** Validation côté client avant toute mutation : les champs requis du
-   *  protocole courant + nom (et l'id au create). Un seul toast d'erreur. */
   const canSave = (): boolean => {
     if (draft.name.trim() === "") return false
-    const missing = CONFIG_FIELDS[draft.kind].some(
+    const missing = fieldsFor(draft.kind).some(
       (f) => f.required && String(draft.config[f.key] ?? "").trim() === "",
     )
     if (missing) return false
@@ -189,7 +190,7 @@ export function AdminProvidersPage() {
 
   const save = useMutationToast({
     mutationFn: async (): Promise<AuthProviderAdmin> => {
-      const fields = CONFIG_FIELDS[draft.kind]
+      const fields = fieldsFor(draft.kind)
       const config = draft.config
       const numFields = fields.filter((f) => f.type === "number")
       const normalized: Record<string, unknown> = { ...config }
@@ -197,23 +198,24 @@ export function AdminProvidersPage() {
         const raw = config[f.key]
         if (raw !== undefined && raw !== "") normalized[f.key] = Number(raw)
       }
+      const managed = isManagedKind(draft.kind)
       const payload = {
         kind: draft.kind,
         name: draft.name.trim(),
         enabled: draft.enabled,
-        config: normalized,
+        ...(managed ? { config: normalized } : {}),
       } as AuthProviderUpsert
       return editing
         ? api.updateAdminProvider(editing.id, payload)
-        : api.createAdminProvider({ ...payload, id: draft.id.trim() })
+        : api.createAdminProvider({ ...payload, config: normalized, id: draft.id.trim() })
     },
-    success: (p) =>
+    success: () =>
       t(editing ? "providers.toast.updateSuccess" : "providers.toast.createSuccess"),
     invalidate: [["admin", "providers"]],
     onSuccess: closeModal,
   })
 
-  // ── Providers : toggle enabled / suppression / test ────────────────────
+  const activeCount = providers.data?.filter((p) => p.enabled).length ?? 0
   const enabledMut = useMutationToast({
     mutationFn: (p: AuthProviderAdmin) =>
       api.updateAdminProvider(p.id, { enabled: !p.enabled }),
@@ -222,6 +224,11 @@ export function AdminProvidersPage() {
         enabled: r.enabled ? t("providers.badge.enabled") : t("providers.badge.disabled"),
       }),
     invalidate: [["admin", "providers"]],
+    onError: (err) => {
+      if (err instanceof Error && (err as ApiError).code === "last_active_provider") {
+        toast.error(t("providers.toast.lastActiveProvider"))
+      }
+    },
   })
 
   const removeProvider = useConfirmDelete<AuthProviderAdmin>({
@@ -248,9 +255,7 @@ export function AdminProvidersPage() {
       if (r.ok) {
         toast.success(t("providers.toast.testOk"))
       } else {
-        toast.error(
-          t("providers.toast.testKo", { message: r.message ?? "HTTP" }),
-        )
+        toast.error(t("providers.toast.testKo", { message: r.message ?? "HTTP" }))
       }
     },
     onError: (err) => {
@@ -272,14 +277,16 @@ export function AdminProvidersPage() {
   }
 
   const approveMut = useMutationToast({
-    mutationFn: () => api.approveAdminPending(approving!.id, { tenantId: approveTenant, role: approveRole }),
+    mutationFn: () =>
+      api.approveAdminPending(approving!.id, { tenantId: approveTenant, role: approveRole }),
     success: t("providers.toast.approveSuccess"),
     invalidate: [["admin", "pendings"], ["users"]],
     onSuccess: () => setApproving(null),
   })
 
   const rejectMut = useMutationToast({
-    mutationFn: () => api.rejectAdminPending(rejecting!.id, rejectReason.trim() || undefined),
+    mutationFn: () =>
+      api.rejectAdminPending(rejecting!.id, rejectReason.trim() || undefined),
     success: t("providers.toast.rejectSuccess"),
     invalidate: [["admin", "pendings"]],
     onSuccess: () => setRejecting(null),
@@ -293,11 +300,10 @@ export function AdminProvidersPage() {
     <PageContainer size="5xl">
       <PageHeader title={t("providers.pageTitle")} subtitle={t("providers.pageSubtitle")} />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as "providers" | "pendings")}>
+      {/* ── Onglets : providers / approbations en attente ──────────────────── */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "pendings")}>
         <Tabs.List>
-          <Tabs.Trigger value="providers">
-            {t("providers.tab.providers")}
-          </Tabs.Trigger>
+          <Tabs.Trigger value="providers">{t("providers.tab.providers")}</Tabs.Trigger>
           <Tabs.Trigger value="pendings">
             {t("providers.tab.pendings")}
             {pendings.data && pendings.data.length > 0 && (
@@ -308,157 +314,198 @@ export function AdminProvidersPage() {
           </Tabs.Trigger>
         </Tabs.List>
 
-        <Tabs.Content value="providers" className="pt-4">
-          {/* ── Liste des providers ─────────────────────────────────────── */}
-          <ListContainer
-            title={t("providers.list.title")}
-            subtitle={providers.data ? t("providers.list.subtitle", { count: providers.data.length }) : undefined}
-            actions={
-              <Button size="small" onClick={openCreate}>
-                <Plus /> {t("providers.actions.new")}
-              </Button>
-            }
-            isEmpty={!providers.isLoading && providers.data?.length === 0}
-            empty={
-              <EmptyState
-                icon={ShieldCheck}
-                title={t("providers.empty.title")}
-                description={t("providers.empty.description")}
-              />
-            }
-          >
-            {providers.isLoading ? (
-              <div className="px-6 py-8">
-                <Text className="text-ui-fg-subtle">{t("users.loading")}</Text>
-              </div>
-            ) : (
-              providers.data?.map((provider) => (
-                <ListRow key={provider.id}>
-                  <div className="flex min-w-0 items-center gap-3">
-                    <ShieldCheck className="shrink-0 text-ui-fg-muted" />
-                    <div className="min-w-0">
-                      <Text weight="plus" className="truncate">
-                        {provider.name}
-                      </Text>
-                      <Badge size="2xsmall" color={KIND_COLOR[provider.kind] ?? "grey"}>
-                        {provider.kind}
-                      </Badge>
-                      <Text size="xsmall" className="mt-0.5 text-ui-fg-muted">
-                        {provider.id}
-                      </Text>
+        <Tabs.Content value="providers" className="mt-5">
+          {/* ── Providers tab ──────────────────────────────────────────────── */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <Heading level="h3">{t("providers.list.title")}</Heading>
+              {providers.data && (
+                <Text size="small" className="text-ui-fg-muted">
+                  {t("providers.list.subtitle", { count: providers.data.length })}
+                </Text>
+              )}
+            </div>
+            <Button size="small" onClick={openCreate}>
+              <Plus /> {t("providers.actions.new")}
+            </Button>
+          </div>
+
+          {providers.isLoading ? (
+            <div className="rounded-lg border border-ui-border-base bg-ui-bg-base p-6">
+              <Text className="text-ui-fg-muted">{t("users.loading")}</Text>
+            </div>
+          ) : providers.data?.length === 0 ? (
+            <div className="rounded-lg border border-ui-border-base bg-ui-bg-base p-8 text-center">
+              <ShieldCheck className="mx-auto mb-2 h-8 w-8 text-ui-fg-muted" />
+              <Text weight="plus" className="text-ui-fg-base">{t("providers.empty.title")}</Text>
+              <Text size="small" className="mt-1 text-ui-fg-muted">{t("providers.empty.description")}</Text>
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {providers.data?.map((provider) => {
+                const kindInfo = KIND_BADGE[provider.kind] ?? { color: "grey" as const, icon: provider.kind }
+                const isLastActive = provider.enabled && activeCount <= 1
+                return (
+                  <li
+                    key={provider.id}
+                    className="group rounded-lg border border-ui-border-base bg-ui-bg-base p-4 transition-all hover:shadow-sm sm:p-5"
+                  >
+                    {/* Header row */}
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ui-bg-subtle">
+                          <ShieldCheck className="h-[18px] w-[18px] text-ui-fg-muted" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Text weight="plus" className="truncate text-ui-fg-base">
+                              {provider.name}
+                            </Text>
+                            <Badge size="2xsmall" color={kindInfo.color}>
+                              {kindInfo.icon}
+                            </Badge>
+                            <Badge size="2xsmall" color={provider.enabled ? "green" : "grey"}>
+                              {provider.enabled
+                                ? t("providers.badge.enabled")
+                                : t("providers.badge.disabled")}
+                            </Badge>
+                          </div>
+                          <Text size="xsmall" className="mt-0.5 text-ui-fg-muted">
+                            {provider.id}
+                          </Text>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <Badge size="2xsmall" color={provider.enabled ? "green" : "grey"}>
-                      {provider.enabled
-                        ? t("providers.badge.enabled")
-                        : t("providers.badge.disabled")}
-                    </Badge>
-                    <div className="flex items-center gap-2">
-                      <Label size="xsmall" className="text-ui-fg-muted">
-                        {t("providers.form.enabledLabel")}
-                      </Label>
-                      <ToggleSwitch
-                        checked={provider.enabled}
-                        onCheckedChange={() => enabledMut.mutate(provider)}
-                        aria-label={t("providers.form.enabledLabel")}
-                      />
+
+                    {/* Actions bar */}
+                    <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-ui-border-base pt-3">
+                      <div className="flex items-center gap-2">
+                        <ToggleSwitch
+                          checked={provider.enabled}
+                          disabled={isLastActive}
+                          onCheckedChange={() => enabledMut.mutate(provider)}
+                          aria-label={t("providers.form.enabledLabel")}
+                        />
+                        <Label size="xsmall" className="text-ui-fg-muted">
+                          {t("providers.form.enabledLabel")}
+                        </Label>
+                      </div>
+
+                      <div className="flex-1" />
+
+                      <div className="flex items-center gap-2">
+                        {isManagedKind(provider.kind) && (
+                          <Button
+                            variant="secondary"
+                            size="small"
+                            disabled={testingId === provider.id}
+                            isLoading={testingId === provider.id}
+                            onClick={() => testMut.mutate(provider.id)}
+                          >
+                            <Beaker />
+                            {t("providers.actions.test")}
+                          </Button>
+                        )}
+                        <Button
+                          variant="secondary"
+                          size="small"
+                          onClick={() => openEdit(provider)}
+                        >
+                          <PencilSquare />
+                          {t("providers.actions.edit")}
+                        </Button>
+                        {provider.id !== "local" && (
+                          <Button
+                            variant="danger"
+                            size="small"
+                            onClick={() => removeProvider(provider)}
+                          >
+                            <Trash />
+                            {t("providers.actions.delete")}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <ActionMenu
-                      groups={[
-                        {
-                          actions: [
-                            {
-                              label: t("providers.actions.test"),
-                              icon: <Beaker />,
-                              disabled: testingId === provider.id,
-                              onClick: () => testMut.mutate(provider.id),
-                            },
-                          ],
-                        },
-                        {
-                          actions: [{
-                            label: t("providers.actions.edit"),
-                            icon: <PencilSquare />,
-                            onClick: () => openEdit(provider),
-                          }],
-                        },
-                        {
-                          actions: [{
-                            label: t("providers.actions.delete"),
-                            icon: <Trash />,
-                            variant: "danger",
-                            onClick: () => removeProvider(provider),
-                          }],
-                        },
-                      ]}
-                    />
-                  </div>
-                </ListRow>
-              ))
-            )}
-          </ListContainer>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </Tabs.Content>
 
-        <Tabs.Content value="pendings" className="pt-4">
-          {/* ── Identités en attente ────────────────────────────────────── */}
-          <ListContainer
-            title={t("providers.pendings.title")}
-            subtitle={pendings.data ? t("providers.pendings.subtitle", { count: pendings.data.length }) : undefined}
-            isEmpty={!pendings.isLoading && pendings.data?.length === 0}
-            empty={
-              <EmptyState
-                icon={ShieldCheck}
-                title={t("providers.pendings.empty.title")}
-                description={t("providers.pendings.empty.description")}
-              />
-            }
-          >
-            {pendings.isLoading ? (
-              <div className="px-6 py-8">
-                <Text className="text-ui-fg-subtle">{t("users.loading")}</Text>
-              </div>
-            ) : (
-              pendings.data?.map((pending) => (
-                <ListRow key={pending.id}>
-                  <div className="flex min-w-0 items-center gap-3">
-                    <ShieldCheck className="shrink-0 text-ui-fg-muted" />
-                    <div className="min-w-0">
-                      <Text weight="plus" className="truncate">
-                        {pending.email ?? pending.name ?? t("providers.pendings.emailUnknown")}
-                      </Text>
-                      <Text size="xsmall" className="text-ui-fg-muted">
-                        {pending.providerId}
-                      </Text>
+        <Tabs.Content value="pendings" className="mt-5">
+          {/* ── Pendings tab ───────────────────────────────────────────────── */}
+          <div className="mb-4">
+            <Heading level="h3">{t("providers.pendings.title")}</Heading>
+            {pendings.data && (
+              <Text size="small" className="text-ui-fg-muted">
+                {t("providers.pendings.subtitle", { count: pendings.data.length })}
+              </Text>
+            )}
+          </div>
+
+          {pendings.isLoading ? (
+            <div className="rounded-lg border border-ui-border-base bg-ui-bg-base p-6">
+              <Text className="text-ui-fg-muted">{t("users.loading")}</Text>
+            </div>
+          ) : pendings.data?.length === 0 ? (
+            <div className="rounded-lg border border-ui-border-base bg-ui-bg-base p-8 text-center">
+              <CheckCircle className="mx-auto mb-2 h-8 w-8 text-ui-fg-muted" />
+              <Text weight="plus" className="text-ui-fg-base">{t("providers.pendings.empty.title")}</Text>
+              <Text size="small" className="mt-1 text-ui-fg-muted">{t("providers.pendings.empty.description")}</Text>
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {pendings.data?.map((pending) => (
+                <li
+                  key={pending.id}
+                  className="rounded-lg border border-ui-border-base bg-ui-bg-base p-4 transition-all hover:shadow-sm sm:p-5"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ui-bg-subtle">
+                        <ShieldCheck className="h-[18px] w-[18px] text-ui-fg-muted" />
+                      </div>
+                      <div className="min-w-0">
+                        <Text weight="plus" className="truncate text-ui-fg-base">
+                          {pending.email ?? pending.name ?? t("providers.pendings.emailUnknown")}
+                        </Text>
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <Text size="xsmall" className="text-ui-fg-muted">
+                            {pending.providerId}
+                          </Text>
+                          <Text size="xsmall" className="text-ui-fg-muted">
+                            {new Date(pending.createdAt).toLocaleString()}
+                          </Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="small"
+                        variant="secondary"
+                        onClick={() => openApprove(pending)}
+                        disabled={tenants.isLoading || tenants.data?.length === 0}
+                      >
+                        <CheckCircle /> {t("providers.pendings.approve")}
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="danger"
+                        onClick={() => {
+                          setRejectReason("")
+                          setRejecting(pending)
+                        }}
+                      >
+                        <XCircle /> {t("providers.pendings.reject")}
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <Text size="xsmall" className="text-ui-fg-subtle">
-                      {new Date(pending.createdAt).toLocaleString()}
-                    </Text>
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      onClick={() => openApprove(pending)}
-                      disabled={tenants.isLoading || tenants.data?.length === 0}
-                    >
-                      <CheckCircle /> {t("providers.pendings.approve")}
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="danger"
-                      onClick={() => {
-                        setRejectReason("")
-                        setRejecting(pending)
-                      }}
-                    >
-                      <XCircle /> {t("providers.pendings.reject")}
-                    </Button>
-                  </div>
-                </ListRow>
-              ))
-            )}
-          </ListContainer>
+                </li>
+              ))}
+            </ul>
+          )}
         </Tabs.Content>
       </Tabs>
 
@@ -466,11 +513,13 @@ export function AdminProvidersPage() {
       <FocusModal open={modalOpen} onOpenChange={(o) => o || closeModal()}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>
-              {editing
-                ? t("providers.form.titleEdit", { name: editing.name })
-                : t("providers.form.titleCreate")}
-            </Heading>
+            <FocusModal.Title asChild>
+              <Heading>
+                {editing
+                  ? t("providers.form.titleEdit", { name: editing.name })
+                  : t("providers.form.titleCreate")}
+              </Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body className="overflow-y-auto">
             <ModalForm size="lg" onSubmit={submit}>
@@ -480,7 +529,7 @@ export function AdminProvidersPage() {
                   <Select
                     value={draft.kind}
                     onValueChange={(v) =>
-                      setDraft((d) => ({ ...d, kind: v as Kind, config: {} }))
+                      setDraft((d) => ({ ...d, kind: v, config: {} }))
                     }
                     disabled={!!editing}
                   >
@@ -488,7 +537,7 @@ export function AdminProvidersPage() {
                       <Select.Value />
                     </Select.Trigger>
                     <Select.Content>
-                      {KINDS.map((k) => (
+                      {(isManagedKind(draft.kind) ? KINDS : [...KINDS, draft.kind]).map((k) => (
                         <Select.Item key={k} value={k}>
                           {t(`providers.form.kind${k[0].toUpperCase()}${k.slice(1)}`)}
                         </Select.Item>
@@ -520,7 +569,9 @@ export function AdminProvidersPage() {
                 <div className="flex items-center gap-2 pt-4">
                   <ToggleSwitch
                     checked={draft.enabled}
-                    onCheckedChange={(checked) => setDraft((d) => ({ ...d, enabled: checked }))}
+                    onCheckedChange={(checked) =>
+                      setDraft((d) => ({ ...d, enabled: checked }))
+                    }
                     aria-label={t("providers.form.enabledLabel")}
                   />
                   <div>
@@ -536,30 +587,43 @@ export function AdminProvidersPage() {
 
               <div>
                 <Label size="small">{t("providers.form.configLabel")}</Label>
-                {CONFIG_FIELDS[draft.kind].map((field) => (
-                  <div key={field.key} className="mt-3">
-                    <Label size="small">{t(field.labelKey)}</Label>
-                    {field.type === "textarea" ? (
-                      <Textarea
-                        value={String(draft.config[field.key] ?? "")}
-                        onChange={(e) => setField(field.key, e.target.value)}
-                        rows={4}
-                        className="mt-1 font-mono"
-                      />
-                    ) : (
-                      <Input
-                        type={field.type === "password" ? "password" : "text"}
-                        inputMode={field.type === "number" ? "numeric" : undefined}
-                        value={String(draft.config[field.key] ?? "")}
-                        onChange={(e) => setField(field.key, field.type === "number" ? Number(e.target.value) : e.target.value)}
-                        className="mt-1"
-                      />
-                    )}
-                  </div>
-                ))}
-                <Text size="xsmall" className="mt-2 text-ui-fg-muted">
-                  {t("providers.form.secretHint")}
-                </Text>
+                {fieldsFor(draft.kind).length === 0 ? (
+                  <Text size="xsmall" className="mt-2 block text-ui-fg-muted">
+                    {t("providers.form.configUnsupported")}
+                  </Text>
+                ) : (
+                  <>
+                    {fieldsFor(draft.kind).map((field) => (
+                      <div key={field.key} className="mt-3">
+                        <Label size="small">{t(`providers.${field.labelKey}`)}</Label>
+                        {field.type === "textarea" ? (
+                          <Textarea
+                            value={String(draft.config[field.key] ?? "")}
+                            onChange={(e) => setField(field.key, e.target.value)}
+                            rows={4}
+                            className="mt-1 font-mono"
+                          />
+                        ) : (
+                          <Input
+                            type={field.type === "password" ? "password" : "text"}
+                            inputMode={field.type === "number" ? "numeric" : undefined}
+                            value={String(draft.config[field.key] ?? "")}
+                            onChange={(e) =>
+                              setField(
+                                field.key,
+                                field.type === "number" ? Number(e.target.value) : e.target.value,
+                              )
+                            }
+                            className="mt-1"
+                          />
+                        )}
+                      </div>
+                    ))}
+                    <Text size="xsmall" className="mt-2 text-ui-fg-muted">
+                      {t("providers.form.secretHint")}
+                    </Text>
+                  </>
+                )}
               </div>
 
               <div className="mt-2 flex justify-end gap-2">
@@ -579,11 +643,13 @@ export function AdminProvidersPage() {
       <FocusModal open={!!approving} onOpenChange={(o) => o || setApproving(null)}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>
-              {t("providers.pendings.approveTitle", {
-                email: approving?.email ?? t("providers.pendings.emailUnknown"),
-              })}
-            </Heading>
+            <FocusModal.Title asChild>
+              <Heading>
+                {t("providers.pendings.approveTitle", {
+                  email: approving?.email ?? t("providers.pendings.emailUnknown"),
+                })}
+              </Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body>
             <ModalForm
@@ -659,11 +725,13 @@ export function AdminProvidersPage() {
       <FocusModal open={!!rejecting} onOpenChange={(o) => o || setRejecting(null)}>
         <FocusModal.Content>
           <FocusModal.Header>
-            <Heading>
-              {t("providers.pendings.rejectTitle", {
-                email: rejecting?.email ?? t("providers.pendings.emailUnknown"),
-              })}
-            </Heading>
+            <FocusModal.Title asChild>
+              <Heading>
+                {t("providers.pendings.rejectTitle", {
+                  email: rejecting?.email ?? t("providers.pendings.emailUnknown"),
+                })}
+              </Heading>
+            </FocusModal.Title>
           </FocusModal.Header>
           <FocusModal.Body>
             <ModalForm onSubmit={() => !rejectMut.isPending && rejectMut.mutate()}>

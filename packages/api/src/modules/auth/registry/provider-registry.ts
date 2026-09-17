@@ -6,9 +6,12 @@
  */
 
 import { createProvider } from "../providers/protocol-adapter"
-import type { AuthProviderContract } from "../providers/types"
+import type { AuthProviderContract, ProviderKind } from "../providers/types"
 import { PROVIDER_SEEDS, loadTestOidcSeed, loadTestSamlSeed } from "./seeds"
 import { loadProviderRows } from "./provider-db"
+
+/** Kinds pour lesquels un adapter existe (createProvider ne throw pas). */
+const SUPPORTED_KINDS: ProviderKind[] = ["local", "oidc", "oauth2", "saml"]
 
 export class ProviderRegistry {
   private providers = new Map<string, AuthProviderContract>()
@@ -66,9 +69,21 @@ export class ProviderRegistry {
     const rows = await loadProviderRows()
     const next = new Map<string, AuthProviderContract>()
     for (const row of rows) {
-      const config = { ...row.config, enabled: row.enabled } as Parameters<typeof createProvider>[2]
-      const provider = createProvider(row.kind, row.id, config)
-      next.set(provider.id, provider)
+      if (!SUPPORTED_KINDS.includes(row.kind)) {
+        continue
+      }
+      try {
+        const config = {
+          ...row.config,
+          enabled: row.enabled,
+          name: row.name,
+        } as Parameters<typeof createProvider>[2]
+        const provider = createProvider(row.kind, row.id, config)
+        next.set(provider.id, provider)
+      } catch {
+        // Config incomplète ou paramètres invalides → provider non hydraté
+        // (visible en DB mais indisponible pour SSO jusqu'à configuration valide).
+      }
     }
     this.providers = next
   }

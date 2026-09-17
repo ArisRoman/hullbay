@@ -38,6 +38,8 @@ const DISCOVERY_TTL_MS = 5 * 60 * 1000
 export interface OidcProviderOptions {
   id: string
   enabled: boolean
+  /** Nom d'affichage (colonne AuthProvider.name) ; défaut = host de l'issuer. */
+  name?: string
   /** Issuer attendu — comparé au discovery ET à l'iss de l'id_token. */
   issuer: string
   clientId: string
@@ -100,7 +102,7 @@ export class OidcProvider implements AuthProviderContract {
     return {
       id: this.id,
       kind: "oidc",
-      name: this.options.issuer.split("//")[1]?.split("/")[0] ?? "OIDC",
+      name: this.options.name?.trim() || this.options.issuer.split("//")[1]?.split("/")[0] || "OIDC",
       enabled: this.enabled,
     }
   }

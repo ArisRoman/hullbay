@@ -28,6 +28,8 @@ const STATE_TTL_MS = 10 * 60 * 1000
 export interface Oauth2ProviderOptions {
   id: string
   enabled: boolean
+  /** Nom d'affichage (colonne AuthProvider.name) ; défaut = host d'autorisation. */
+  name?: string
   authorizationUri: string
   tokenUri: string
   userinfoUri: string
@@ -60,7 +62,7 @@ export class Oauth2Provider implements AuthProviderContract {
     return {
       id: this.id,
       kind: "oauth2",
-      name: host,
+      name: this.options.name?.trim() || host,
       enabled: this.enabled,
     }
   }

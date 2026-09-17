@@ -5,7 +5,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import { z } from "zod"
-import jwt from "jsonwebtoken"
+import { createHash } from "node:crypto"
 import { prisma } from "../../../lib/prisma"
 import { requireRole, currentUser } from "../authorization/rbac"
 import { authRateLimiter } from "../rate-limit"
@@ -77,10 +77,9 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     {
       schema: { tags: ["auth"] },
     },
-    async (req, reply) => {
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/needs-bootstrap")
-      const before = authRateLimiter.check(key)
-      if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
+    async () => {
+      // Pas de rate-limit ici : la route est un simple read public et le bucket
+      // n'était jamais armé (aucun recordFailure) — check() était un no-op.
       return { needsBootstrap: (await authService.countUsers()) === 0 }
     },
   )
@@ -129,13 +128,10 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const body = req.body as { pendingToken: string; code: string }
-      let account = body.pendingToken
-      try {
-        const decoded = jwt.decode(body.pendingToken) as { sub?: string } | null
-        if (decoded?.sub) account = decoded.sub
-      } catch {
-        // token inexploitable : fallback sur le token brut comme clé de rate-limit
-      }
+      // Clé de rate-limit dérivée du token BRUT (hashé), jamais d'un claim
+      // décodé sans vérification : sinon un attaquant forgerait `sub` pour
+      // échapper au throttle par compte et brute-forcer le TOTP.
+      const account = createHash("sha256").update(body.pendingToken).digest("hex").slice(0, 32)
       const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/verify", account)
       const before = authRateLimiter.check(key)
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)

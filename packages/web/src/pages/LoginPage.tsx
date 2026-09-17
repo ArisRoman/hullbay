@@ -208,36 +208,6 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
       {!pendingToken ? (
         <div className="flex flex-col gap-4">
 
-          {/* SSO : boutons vers les providers OIDC/OAuth2/SAML activés */}
-          {ssoProviders && ssoProviders.length > 0 && (
-            <>
-              <div className="flex flex-col gap-2">
-                {ssoProviders.map((p) => (
-                  <Button
-                    key={p.id}
-                    variant="secondary"
-                    onClick={() => {
-                      const base = p.kind === "saml" ? "/api/auth/saml" : "/api/auth/sso"
-                      window.location.href = `${base}/${encodeURIComponent(p.id)}/login`
-                    }}
-                    disabled={disabled}
-                    className="h-10 w-full rounded-lg disabled:opacity-50"
-                  >
-                    {t("auth.sso.signInWith", { name: p.name })}
-                  </Button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="h-px flex-1 bg-ui-border-base" />
-                <Text className="text-xs uppercase tracking-wide text-ui-fg-muted">
-                  {t("auth.sso.orContinueWithLocal")}
-                </Text>
-                <div className="h-px flex-1 bg-ui-border-base" />
-              </div>
-            </>
-          )}
-
           {/* Email */}
           <div>
             <Label
@@ -284,6 +254,36 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
           >
             {t("auth.login.submitButton")}
           </Button>
+
+          {/* SSO : boutons vers les providers OIDC/OAuth2/SAML activés (sous le login classique) */}
+          {ssoProviders && ssoProviders.length > 0 && (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="h-px flex-1 bg-ui-border-base" />
+                <Text className="text-xs uppercase tracking-wide text-ui-fg-muted">
+                  {t("auth.sso.orContinueWithLocal")}
+                </Text>
+                <div className="h-px flex-1 bg-ui-border-base" />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                {ssoProviders.map((p) => (
+                  <Button
+                    key={p.id}
+                    variant="secondary"
+                    onClick={() => {
+                      const base = p.kind === "saml" ? "/api/auth/saml" : "/api/auth/sso"
+                      window.location.href = `${base}/${encodeURIComponent(p.id)}/login`
+                    }}
+                    disabled={disabled}
+                    className="h-10 w-full rounded-lg disabled:opacity-50"
+                  >
+                    {t("auth.sso.signInWith", { name: p.name })}
+                  </Button>
+                ))}
+              </div>
+            </>
+          )}
 
           </div>
       ) : (

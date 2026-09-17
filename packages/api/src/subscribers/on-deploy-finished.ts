@@ -19,7 +19,7 @@ const AUDITED: Record<string, string> = {
   "user.role.changed": "user.role.changed",
   "user.created": "user.created",
   "user.deleted": "user.deleted",
-  "mfa.enabled": "mfa.enabled",
+  "auth.mfa.enabled": "auth.mfa.enabled",
   "autoscale.applied": "autoscale.applied",
   "prune.finished": "prune.finished",
   "secret.set": "secret.set",

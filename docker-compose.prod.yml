@@ -80,10 +80,14 @@ services:
       WEB_ORIGIN: ${PUBLIC_URL:?set in .env}
       DOCKER_HOST: tcp://socket-proxy:2375
       CADDY_ADMIN_URL: http://caddy:2019
+      # Keyring RS256 persisté : sans ce volume, chaque recréation de conteneur
+      # régénère les clés et invalide toutes les sessions (401 → /login).
+      JWKS_KEYRING_FILE: /app/data/jwks-keyring.json
       # Version déployée (source de vérité currentVersion) + backup DB updates.
       IMAGE_TAG: ${IMAGE_TAG:-latest}
     volumes:
       - ops_backups:/app/backups
+      - ops_jwks:/app/data
     networks:
       - default
       - boz_system
@@ -125,6 +129,7 @@ volumes:
   caddy_data:
   caddy_config:
   ops_backups:
+  ops_jwks:
 
 networks:
   boz_system:

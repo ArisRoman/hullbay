@@ -89,6 +89,7 @@
     "secrets": "Secrets",
     "users": "Users",
     "providers": "Authentication",
+    "sessions": "Devices",
     "settings": "Settings",
     "updates": "Updates",
     "logout": "Logout",
@@ -532,6 +533,7 @@
       "testOk": "Connection OK — valid config",
       "testKo": "Test failed: {{message}}",
       "enabledChanged": "Provider {{enabled}}",
+      "lastActiveProvider": "Cannot disable: at least one provider must stay active",
       "approveSuccess": "Identity approved",
       "rejectSuccess": "Request rejected"
     },
@@ -562,6 +564,8 @@
       "kindOidc": "OIDC — OpenID Connect",
       "kindOauth2": "OAuth2 — code + userinfo",
       "kindSaml": "SAML 2.0 — IdP initiated",
+      "kindLocal": "Local — internal accounts",
+      "kindLdap": "LDAP — enterprise directory",
       "idLabel": "Identifier",
       "idPlaceholder": "oidc-corp, google, keycloak…",
       "idHint": "Referenced in the callback URL. a-z, 0-9 and dashes only.",
@@ -571,6 +575,7 @@
       "enabledHint": "An inactive provider is hidden from the sign-in screen.",
       "configLabel": "Configuration",
       "secretHint": "“••••••••” means: keep the current value (unchanged).",
+      "configUnsupported": "This protocol's configuration cannot be edited here. Only the name and state can be changed.",
       "requiredErrs": "Missing or invalid required fields"
     },
     "field": {
@@ -618,6 +623,30 @@
       "rejectDesc": "“{{email}}” will stay in rejected state. They can sign in again via the IdP.",
       "reasonLabel": "Reason (optional)",
       "roleHint": "The granted role lives on this tenant's Membership."
+    }
+  },
+  "sessions": {
+    "pageTitle": "Connected devices",
+    "pageSubtitle": "Active sessions on your account. Revoke any device you don't recognize.",
+    "empty": {
+      "title": "No connected device",
+      "description": "Sessions appear here after you sign in."
+    },
+    "table": {
+      "device": "Device",
+      "ip": "IP address",
+      "lastSeen": "Last active",
+      "expiresAt": "Expires",
+      "actions": "Actions"
+    },
+    "unknownDevice": "Unknown device",
+    "current": "This device",
+    "revoke": "Revoke",
+    "revoked": "Session revoked",
+    "confirm": {
+      "title": "Revoke this device?",
+      "description": "The session will be invalidated immediately. The device will have to sign in again.",
+      "currentDescription": "This is your current session: you will be signed out immediately."
     }
   },
   "settings": {
