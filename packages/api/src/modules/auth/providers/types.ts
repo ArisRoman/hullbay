@@ -68,6 +68,8 @@ export type AuthErrorCode =
   | "mfa_not_enabled"
   | "password_incorrect"
   | "identity_pending_approval"
+  | "session_revoked"
+  | "session_invalid"
 
 export class AuthError extends Error {
   code: AuthErrorCode

@@ -19,6 +19,7 @@ import {
   registerSamlRoutes,
   registerProvidersRoutes,
   registerPendingRoutes,
+  registerSessionsRoutes,
   providerRegistry,
   syncProviderSeedsToDb,
 } from "./modules/auth";
@@ -165,6 +166,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     await registerSamlRoutes(app);
     await registerProvidersRoutes(app);
     await registerPendingRoutes(app);
+    await registerSessionsRoutes(app);
     await registerSystemRoutes(app);
     await registerProjectRoutes(app);
     await registerReconcilerRoutes(app);

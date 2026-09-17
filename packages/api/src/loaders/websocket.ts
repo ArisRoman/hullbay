@@ -1,4 +1,5 @@
 import type { Server as HttpServer } from "node:http"
+import jwt from "jsonwebtoken"
 import { Server as SocketIOServer } from "socket.io"
 import { eventBus } from "../lib/event-bus"
 import { DockerEngineService } from "../modules/docker-engine/service"
@@ -31,8 +32,11 @@ export function attachWebSocket(httpServer: HttpServer): SocketIOServer {
     if (!token) return next(new Error("AUTH_FAILED"))
     try {
       const decoded = authService.verifyToken(token)
+      const header = jwt.decode(token, { complete: true })
+      const sessionId = (header as { header?: { kid?: string } })?.header?.kid ?? undefined
       socket.data.userId = decoded.sub
       socket.data.role = decoded.role
+      socket.data.sessionId = sessionId
       next()
     } catch {
       next(new Error("AUTH_FAILED"))
