@@ -25,6 +25,8 @@ export { registerSamlRoutes } from "./routes/saml.routes"
 export { registerProvidersRoutes } from "./routes/providers.routes"
 export { registerPendingRoutes } from "./routes/pending.routes"
 export { registerSessionsRoutes } from "./routes/sessions.routes"
+export { registerWebauthnRoutes } from "./routes/webauthn.routes"
+export { registerLdapRoutes } from "./routes/ldap.routes"
 
 // Provider registry
 export { providerRegistry } from "./registry/provider-registry"

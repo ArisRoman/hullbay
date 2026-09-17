@@ -20,6 +20,8 @@ import {
   registerProvidersRoutes,
   registerPendingRoutes,
   registerSessionsRoutes,
+  registerWebauthnRoutes,
+  registerLdapRoutes,
   providerRegistry,
   syncProviderSeedsToDb,
 } from "./modules/auth";
@@ -79,6 +81,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           "req.body.credential",
           "req.body.privateKey",
           "req.body.SAMLResponse",
+          "req.body.ldapPassword",
+          "req.body.bindSecret",
           "req.headers.authorization",
           "req.headers.cookie",
         ],
@@ -97,12 +101,13 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     error.validation.forEach((v) => {
       const path = v.instancePath?.replace("/", "") || "body";
       if (!fieldErrors[path]) fieldErrors[path] = [];
-      fieldErrors[path].push(v.message ?? "Une Erreur est survenue lors de la Validation");
+      fieldErrors[path].push(v.message ?? "Une erreur est survenue lors de la validation");
     });
 
     return reply.code(400).send({
       statusCode: 400,
-      error: "Validation echouee",
+      error: "Validation échouée",
+      code: "validation_failed",
       details: fieldErrors,
     });
   }
@@ -122,7 +127,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
       info: {
         title: "hullbay API",
         description:
-          "Interface interactive pour découvrir et tester les endpoints du système.",
+          "Interactive API documentation for hullbay infrastructure ops-panel.",
         version: "1.0.0",
       },
       servers: [{ url: `http://${HOST}:${PORT}` }],
@@ -167,6 +172,8 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     await registerProvidersRoutes(app);
     await registerPendingRoutes(app);
     await registerSessionsRoutes(app);
+    await registerWebauthnRoutes(app);
+    await registerLdapRoutes(app);
     await registerSystemRoutes(app);
     await registerProjectRoutes(app);
     await registerReconcilerRoutes(app);

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query"
 import { toast } from "@medusajs/ui"
+import i18n from "../i18n/config"
 
 type Options<TData, TVars> = {
   mutationFn: (vars: TVars) => Promise<TData>
@@ -14,6 +15,11 @@ type Options<TData, TVars> = {
   invalidate?: QueryKey[]
   /** Titre du toast d'erreur (défaut : "Erreur"). */
   errorTitle?: string
+  /**
+   * Description du toast d'erreur (défaut : `err.message`). Permet d'ajouter
+   * un détail exploitable (ex. champ zod fautif) sans dupliquer le toast.
+   */
+  errorDescription?: (err: Error, vars: TVars) => string | undefined
   /** Durée d'affichage du toast d'erreur en millisecondes (défaut: 5000). Utilisé pour les erreurs critiques. */
   errorDuration?: number
   /** Callback additionnel après le succès (comportements spécifiques à la page). */
@@ -33,7 +39,8 @@ export function useMutationToast<TData = unknown, TVars = void>({
   success,
   successDescription,
   invalidate,
-  errorTitle = "Erreur",
+  errorTitle,
+  errorDescription,
   errorDuration,
   onSuccess,
   onError,
@@ -54,11 +61,13 @@ export function useMutationToast<TData = unknown, TVars = void>({
       onSuccess?.(data, vars)
     },
     onError: (err, vars) => {
-      const errorOptions: any = { description: err.message }
+      const errorOptions: any = { description: errorDescription?.(err, vars) ?? err.message }
       if (errorDuration !== undefined) {
         errorOptions.duration = errorDuration
       }
-      toast.error(errorTitle, errorOptions)
+      // Titre résolu au moment de l'erreur (et non au render) : il suit un
+      // changement de langue sans re-render du hook.
+      toast.error(errorTitle || i18n.t("common.error", { defaultValue: "Erreur" }), errorOptions)
       onError?.(err, vars)
     },
   })

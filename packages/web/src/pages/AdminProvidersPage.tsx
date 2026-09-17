@@ -38,9 +38,9 @@ import { PageContainer, PageHeader } from "../components/PageHeader"
 import { ModalForm } from "../components/ModalForm"
 import { ToggleSwitch } from "../components/ToggleSwitch"
 
-type Kind = "oidc" | "oauth2" | "saml"
+type Kind = "oidc" | "oauth2" | "saml" | "ldap"
 
-const KINDS: Kind[] = ["oidc", "oauth2", "saml"]
+const KINDS: Kind[] = ["oidc", "oauth2", "saml", "ldap"]
 
 type BadgeColor = "green" | "red" | "blue" | "orange" | "purple" | "grey"
 
@@ -93,6 +93,17 @@ const CONFIG_FIELDS: Record<Kind, FieldDef[]> = {
     { key: "callbackUrl", labelKey: "field.callbackUrl", required: true, type: "url" },
     { key: "audience", labelKey: "field.audience" },
     { key: "acceptedClockSkewMs", labelKey: "field.acceptedClockSkewMs", type: "number" },
+  ],
+  ldap: [
+    { key: "url", labelKey: "field.ldapUrl", required: true },
+    { key: "bindDn", labelKey: "field.bindDn" },
+    { key: "bindSecret", labelKey: "field.bindSecret", type: "password" },
+    { key: "searchBase", labelKey: "field.searchBase", required: true },
+    { key: "searchFilter", labelKey: "field.searchFilter", required: true },
+    { key: "stableAttr", labelKey: "field.stableAttr", required: true },
+    { key: "groupSearchBase", labelKey: "field.groupSearchBase" },
+    { key: "groupFilter", labelKey: "field.groupFilter" },
+    { key: "timeoutMs", labelKey: "field.timeoutMs", type: "number" },
   ],
 }
 
@@ -196,7 +207,11 @@ export function AdminProvidersPage() {
       const normalized: Record<string, unknown> = { ...config }
       for (const f of numFields) {
         const raw = config[f.key]
-        if (raw !== undefined && raw !== "") normalized[f.key] = Number(raw)
+        // Champ vide/effacé ou non numérique : on retire la clé au lieu
+        // d'envoyer "" / NaN (zod number refuserait → invalid_config).
+        const n = raw === undefined || raw === "" ? NaN : Number(raw)
+        if (Number.isFinite(n)) normalized[f.key] = n
+        else delete normalized[f.key]
       }
       const managed = isManagedKind(draft.kind)
       const payload = {
@@ -211,6 +226,14 @@ export function AdminProvidersPage() {
     },
     success: () =>
       t(editing ? "providers.toast.updateSuccess" : "providers.toast.createSuccess"),
+    // Rend visible le champ refusé par zod (sinon le message générique
+    // "Configuration du fournisseur invalide." ne dit pas ce qui cloche).
+    errorDescription: (err) => {
+      const details = (err as ApiError).details as Record<string, string[]> | undefined
+      const entry = details && Object.entries(details)[0]
+      if (!entry) return err.message
+      return `${err.message} — ${entry[0]}: ${entry[1]?.[0] ?? ""}`
+    },
     invalidate: [["admin", "providers"]],
     onSuccess: closeModal,
   })
@@ -298,7 +321,15 @@ export function AdminProvidersPage() {
 
   return (
     <PageContainer size="5xl">
-      <PageHeader title={t("providers.pageTitle")} subtitle={t("providers.pageSubtitle")} />
+      <PageHeader
+        title={t("providers.pageTitle")}
+        subtitle={t("providers.pageSubtitle")}
+        actions={
+          <Button size="small" onClick={openCreate}>
+            <Plus /> {t("providers.actions.new")}
+          </Button>
+        }
+      />
 
       {/* ── Onglets : providers / approbations en attente ──────────────────── */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "providers" | "pendings")}>
@@ -316,18 +347,13 @@ export function AdminProvidersPage() {
 
         <Tabs.Content value="providers" className="mt-5">
           {/* ── Providers tab ──────────────────────────────────────────────── */}
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <Heading level="h3">{t("providers.list.title")}</Heading>
-              {providers.data && (
-                <Text size="small" className="text-ui-fg-muted">
-                  {t("providers.list.subtitle", { count: providers.data.length })}
-                </Text>
-              )}
-            </div>
-            <Button size="small" onClick={openCreate}>
-              <Plus /> {t("providers.actions.new")}
-            </Button>
+          <div className="mb-4">
+            <Heading level="h3">{t("providers.list.title")}</Heading>
+            {providers.data && (
+              <Text size="small" className="text-ui-fg-muted">
+                {t("providers.list.subtitle", { count: providers.data.length })}
+              </Text>
+            )}
           </div>
 
           {providers.isLoading ? (
@@ -691,9 +717,9 @@ export function AdminProvidersPage() {
                         <Select.Value />
                       </Select.Trigger>
                       <Select.Content>
-                        <Select.Item value="viewer">viewer</Select.Item>
-                        <Select.Item value="operator">operator</Select.Item>
-                        <Select.Item value="owner">owner</Select.Item>
+                        <Select.Item value="viewer">{t("users.createModal.roleViewer")}</Select.Item>
+                        <Select.Item value="operator">{t("users.createModal.roleOperator")}</Select.Item>
+                        <Select.Item value="owner">{t("nav.ownerBadge")}</Select.Item>
                       </Select.Content>
                     </Select>
                     <Text size="xsmall" className="mt-1 text-ui-fg-muted">

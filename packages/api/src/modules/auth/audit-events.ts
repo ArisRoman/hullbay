@@ -14,6 +14,9 @@ export const AUTH_AUDIT_EVENTS = {
   mfaEnabled: "auth.mfa.enabled",
   passwordChanged: "auth.password.changed",
   samlFailed: "auth.saml.failed",
+  ldapFailed: "auth.ldap.failed",
+  webauthnRegistered: "auth.webauthn.registered",
+  webauthnDeleted: "auth.webauthn.deleted",
   // Phase 5A1 — CRUD providers + workflow approbation.
   providerCreated: "auth.provider.created",
   providerUpdated: "auth.provider.updated",

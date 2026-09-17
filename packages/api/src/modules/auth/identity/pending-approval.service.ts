@@ -50,10 +50,6 @@ export async function approvePendingIdentity<const T extends ApproveTarget>(
   actorUserId: string | undefined,
   target: T,
 ): Promise<{ userId: string; tenantId: string; role: T["role"] }> {
-  if (!pending.issuer) {
-    throw new PendingApprovalError("l'approbation exige une identité avec issuer (SSO) — demandes locales hors workflow")
-  }
-
   const tenant = await prisma.tenant.findUnique({ where: { id: target.tenantId } })
   if (!tenant) {
     throw new PendingApprovalError("tenant introuvable")
@@ -62,6 +58,13 @@ export async function approvePendingIdentity<const T extends ApproveTarget>(
   const provider = await prisma.authProvider.findUnique({ where: { id: pending.providerId } })
   if (!provider) {
     throw new PendingApprovalError("provider d'origine introuvable ou supprimé")
+  }
+
+  // L'issuer est NULL pour LDAP) : ces demandes sont approuvables au même
+  // titre que les SSO. Les identités purement locales n'entrent jamais dans le
+  // workflow (aucune PendingIdentity n'est créée pour elles).
+  if (!pending.issuer && provider.kind !== "ldap") {
+    throw new PendingApprovalError("l'approbation exige une identité avec issuer (SSO/LDAP) — demandes locales hors workflow")
   }
 
   const result = await prisma.$transaction(async (tx) => {

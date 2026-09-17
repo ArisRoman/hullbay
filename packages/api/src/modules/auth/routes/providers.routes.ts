@@ -20,7 +20,7 @@ import { z } from "zod"
 import { requireRole } from "../authorization/rbac"
 import { prisma } from "../../../lib/prisma"
 import { eventBus } from "../../../lib/event-bus"
-import { encryptObject, encryptSecret } from "../secrets/secret-encryption-service"
+import { encryptObject, encryptProviderSecret } from "../secrets/secret-encryption-service"
 import { SENSITIVE_FIELDS_BY_KIND } from "../registry/seeds"
 import { providerRegistry } from "../registry/provider-registry"
 import type { ProviderKind } from "../providers/types"
@@ -61,14 +61,38 @@ const samlConfigSchema = z.object({
   acceptedClockSkewMs: z.number().int().positive().optional(),
 }).strict()
 
-const CONFIG_SCHEMAS: Record<Exclude<ProviderKind, "local" | "ldap">, z.ZodType<Record<string, unknown>>> = {
+const ldapConfigSchema = z.object({
+  url: z.string().regex(/^ldaps?:\/\/.+/i, "url doit commencer par ldap:// ou ldaps://"),
+  tlsOptions: z.object({
+    rejectUnauthorized: z.boolean().optional(),
+    ca: z.string().optional(),
+  }).optional(),
+  bindDn: z.string().optional(),
+  bindSecret: z.string().optional(),
+  searchBase: z.string().min(1),
+  searchFilter: z.string().min(1),
+  groupSearchBase: z.string().optional(),
+  groupFilter: z.string().optional(),
+  stableAttr: z.string().min(1),
+  attrMap: z.object({
+    username: z.string().optional(),
+    email: z.string().optional(),
+    name: z.string().optional(),
+    groups: z.string().optional(),
+  }).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  handleReferrals: z.boolean().optional(),
+}).strict()
+
+const CONFIG_SCHEMAS: Record<Exclude<ProviderKind, "local">, z.ZodType<Record<string, unknown>>> = {
   oidc: oidcConfigSchema,
   oauth2: oauth2ConfigSchema,
   saml: samlConfigSchema,
+  ldap: ldapConfigSchema,
 }
 
 function kindToSchema(kind: string) {
-  if (kind === "local" || kind === "ldap") return null
+  if (kind === "local") return null
   return CONFIG_SCHEMAS[kind as keyof typeof CONFIG_SCHEMAS] ?? null
 }
 
@@ -119,7 +143,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
 
   const createBody = z.object({
     id: z.string().regex(/^[a-z0-9-]{3,64}$/, "id : a-z0-9 et tirets (3-64)").optional(),
-    kind: z.enum(["oidc", "oauth2", "saml"]),
+    kind: z.enum(["oidc", "oauth2", "saml", "ldap"]),
     name: z.string().min(1, "nom requis").max(120),
     enabled: z.boolean().default(false),
     config: z.record(z.string(), z.any()).default({}),
@@ -141,12 +165,12 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const body = createBody.parse(req.body)
       const schema = kindToSchema(body.kind)
       if (!schema) {
-        return reply.code(400).send({ error: `kind ${body.kind} non géré via l'API` })
+        return reply.code(400).send({ error: "unsupported_kind", message: `kind ${body.kind} n’est pas gérable via l’API`, code: "unsupported_kind" })
       }
       const parsed = schema.safeParse(body.config)
       if (!parsed.success) {
         const details = parsed.error.flatten().fieldErrors
-        return reply.code(400).send({ error: "config invalide", details })
+        return reply.code(400).send({ error: "invalid_config", message: "configuration invalide", code: "invalid_config", details })
       }
       const config = encryptObject(parsed.data, SENSITIVE_FIELDS_BY_KIND[body.kind])
       try {
@@ -164,7 +188,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         return reply.code(201).send(dto(row))
       } catch (err) {
         if (err instanceof Error && /unique/i.test(err.message) && body.id) {
-          return reply.code(409).send({ error: "un provider porte déjà cet id" })
+          return reply.code(409).send({ error: "provider_conflict", message: "un provider porte déjà cet id", code: "provider_conflict" })
         }
         throw err
       }
@@ -193,7 +217,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string }
       const body = updateBody.parse(req.body)
       const row = await prisma.authProvider.findUnique({ where: { id } })
-      if (!row) return reply.code(404).send({ error: "provider introuvable" })
+      if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
 
       // Garde anti-lockout : on ne peut jamais désactiver le dernier provider
       // actif (plus aucun moyen de connecter un compte ⇒ verrouillage total).
@@ -203,8 +227,9 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         })
         if (otherEnabled === 0) {
           return reply.code(400).send({
-            error: "au moins un provider doit rester actif",
-            code: "last_active_provider",
+            error: "cannot_disable_last_provider",
+            message: "au moins un provider doit rester actif",
+            code: "cannot_disable_last_provider",
           })
         }
       }
@@ -214,12 +239,12 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       let encryptedConfig = currentConfig
       if (body.config !== undefined) {
         if (!schema) {
-          return reply.code(400).send({ error: `kind ${row.kind} non géré via l'API` })
+          return reply.code(400).send({ error: "unsupported_kind", message: `kind ${row.kind} n’est pas gérable via l’API`, code: "unsupported_kind" })
         }
         const parsed = schema.safeParse(body.config)
         if (!parsed.success) {
           const details = parsed.error.flatten().fieldErrors
-          return reply.code(400).send({ error: "config invalide", details })
+          return reply.code(400).send({ error: "invalid_config", message: "configuration invalide", code: "invalid_config", details })
         }
         // Fusionne avec la config existante. Le marqueur sentinelle signifie
         // "conserver la valeur actuelle" : les champs sensibles déjà chiffrés
@@ -230,7 +255,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         const merged: Record<string, unknown> = { ...currentConfig }
         for (const [key, value] of Object.entries(parsed.data)) {
           if (value === SECRET_MASK) continue
-          merged[key] = sensitive.includes(key) ? encryptSecret(value as string) : value
+          merged[key] = sensitive.includes(key) ? encryptProviderSecret(value as string) : value
         }
         encryptedConfig = merged
       }
@@ -263,9 +288,9 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string }
       const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, enabled: true } })
-      if (!row) return reply.code(404).send({ error: "provider introuvable" })
+      if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
       if (row.id === "local") {
-        return reply.code(400).send({ error: "le provider local ne peut pas être supprimé" })
+        return reply.code(400).send({ error: "cannot_delete_local_provider", message: "le provider local ne peut pas être supprimé", code: "cannot_delete_local_provider" })
       }
       if (row.enabled) {
         const otherEnabled = await prisma.authProvider.count({
@@ -273,20 +298,23 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         })
         if (otherEnabled === 0) {
           return reply.code(400).send({
-            error: "au moins un provider doit rester actif",
-            code: "last_active_provider",
+            error: "cannot_delete_last_provider",
+            message: "au moins un provider doit rester actif",
+            code: "cannot_delete_last_provider",
           })
         }
       }
       const identities = await prisma.authIdentity.count({ where: { providerId: id } })
       if (identities > 0) {
         return reply.code(409).send({
-          error: `provider utilisé par ${identities} identité(s) — supprime d'abord les utilisateurs`,
+          error: "provider_in_use",
+          message: `provider utilisé par ${identities} identité(s)`,
+          code: "provider_in_use",
         })
       }
       const pendings = await prisma.pendingIdentity.count({ where: { providerId: id } })
       if (pendings > 0) {
-        return reply.code(409).send({ error: "des approbations en attente référencent ce provider" })
+        return reply.code(409).send({ error: "provider_pendings_exist", message: "des approbations en attente référencent ce provider", code: "provider_pendings_exist" })
       }
       await prisma.authProvider.delete({ where: { id } })
       await providerRegistry.loadFromDb()
@@ -309,18 +337,20 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string }
       const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, config: true, enabled: true, name: true } })
-      if (!row) return reply.code(404).send({ error: "provider introuvable" })
+      if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
 
       const schema = kindToSchema(row.kind)
       if (!schema) {
-        return reply.code(400).send({ error: `kind ${row.kind} non testable via l'API` })
+        return reply.code(400).send({ error: "untestable_kind", message: `kind ${row.kind} n’est pas testable via l’API`, code: "untestable_kind" })
       }
       const current = (row.config as Record<string, unknown>) ?? {}
       const config = schema.safeParse(maskConfig(current, row.kind))
       if (!config.success) {
         return reply.code(200).send({
           ok: false,
-          message: "config incomplète ou invalide — complète les champs requis",
+          error: "invalid_config",
+          message: "configuration incomplète ou invalide",
+          code: "invalid_config",
           details: config.error.flatten().fieldErrors,
         })
       }
@@ -339,16 +369,31 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
           } finally {
             clearTimeout(timer)
           }
+        } else if (row.kind === "ldap") {
+          const { createLdapProvider } = await import("../providers/ldap/ldap-provider")
+          // La config stockée est chiffrée : on la déchiffre avant de construire
+          // l'adapter (lui ne déchiffre plus, cf. double-déchiffrement).
+          const { decryptObject } = await import("../secrets/secret-encryption-service")
+          const decrypted = decryptObject(current, SENSITIVE_FIELDS_BY_KIND["ldap"] ?? [])
+          const ldapProvider = createLdapProvider({ ...(decrypted as Record<string, unknown> as any), id: row.id })
+          const testRes = await ldapProvider.testConnection()
+          return {
+            ok: testRes.ok,
+            message: testRes.message,
+            connectivity: testRes.ok ? "LDAP joignable" : "LDAP injoignable",
+          }
         }
         return {
           ok: true,
-          message: connectivity ?? "config valide",
+          message: connectivity ?? "configuration valide",
           connectivity,
         }
       } catch (err) {
         return reply.code(200).send({
           ok: false,
-          message: err instanceof Error ? err.message : "échec inconnu",
+          error: "serveur LDAP injoignable",
+          message: (err as Error)?.message || "serveur LDAP injoignable",
+          code: "ldap_unreachable",
         })
       }
     },

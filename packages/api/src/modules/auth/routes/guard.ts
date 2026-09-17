@@ -12,6 +12,8 @@ import { sessionManager } from "../core/session-manager"
 const PUBLIC_PATHS = new Set([
   "/api/auth/login",
   "/api/auth/mfa/verify",
+  "/api/auth/mfa/webauthn/auth/options",
+  "/api/auth/mfa/webauthn/auth/verify",
   "/api/auth/bootstrap",
   "/api/auth/needs-bootstrap",
   // Liste des providers activés (login sans token).
@@ -19,9 +21,9 @@ const PUBLIC_PATHS = new Set([
   "/api/system/environment",
 ])
 
-// Flux SSO (initiateLogin + callback) : routes à préfixe dynamique.
-// Phase 3 : oidc/oauth2 (sso). Phase 4 : saml (saml.routes).
-const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/", "/api/auth/saml/"]
+// Flux SSO (initiateLogin + callback) et LDAP : routes à préfixe dynamique.
+// Phase 3 : oidc/oauth2 (sso). Phase 4 : saml. Phase 5A3 : ldap.
+const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/", "/api/auth/saml/", "/api/auth/ldap/"]
 
 function isPublicPath(path: string): boolean {
   if (PUBLIC_PATHS.has(path)) return true
@@ -31,8 +33,17 @@ function isPublicPath(path: string): boolean {
 const MFA_SETUP_PATHS = new Set([
   "/api/auth/mfa/enroll",
   "/api/auth/mfa/confirm",
+  "/api/auth/mfa/webauthn/register/options",
+  "/api/auth/mfa/webauthn/register/verify",
+  "/api/auth/mfa/webauthn/credentials",
   "/api/auth/me",
 ])
+
+function isMfaSetupPath(path: string): boolean {
+  if (MFA_SETUP_PATHS.has(path)) return true
+  if (path.startsWith("/api/auth/mfa/webauthn/credentials/")) return true
+  return false
+}
 
 export function registerAuthGuard(app: FastifyInstance) {
   app.addHook("onRequest", async (req, reply) => {
@@ -55,7 +66,7 @@ export function registerAuthGuard(app: FastifyInstance) {
       ;(req as FastifyRequest & { user?: unknown }).user = decoded
 
       // MFA non activée : seules les routes de setup sont accessibles
-      if (!decoded.mfaEnabled && !MFA_SETUP_PATHS.has(path)) {
+      if (!decoded.mfaEnabled && !isMfaSetupPath(path)) {
         return reply.code(403).send({
           error: "MFA non activée — active la MFA avant de continuer.",
           code: "mfa_not_enabled",

@@ -10,6 +10,7 @@ import {
   toast,
 } from "@medusajs/ui"
 import { useTranslation } from "react-i18next"
+import { getWebauthnAssertion } from "../lib/webauthn-client"
 
 export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
   const { t } = useTranslation()
@@ -36,7 +37,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
       .listAuthProviders()
       .then((providers) => {
         if (!cancelled) {
-          setSsoProviders(providers.filter((p) => p.kind === "oidc" || p.kind === "oauth2" || p.kind === "saml"))
+          setSsoProviders(providers.filter((p) => p.kind === "oidc" || p.kind === "oauth2" || p.kind === "saml" || p.kind === "ldap"))
         }
       })
       .catch(() => {
@@ -151,6 +152,88 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
     }
   }
 
+  const [selectedLdap, setSelectedLdap] = useState<AuthProviderPublic | null>(null)
+  const [ldapUsername, setLdapUsername] = useState("")
+  const [ldapPassword, setLdapPassword] = useState("")
+
+  async function submitLdapCredentials() {
+    if (!selectedLdap) return
+    setLoading(true)
+    try {
+      const res = await api.ldapLogin(selectedLdap.id, ldapUsername, ldapPassword)
+      if (res.mfaRequired && res.pendingToken) {
+        setPendingToken(res.pendingToken)
+        return
+      }
+      if (res.token) {
+        auth.set(res.token)
+        onAuthed()
+        navigate("/", { replace: true })
+      }
+    } catch (e) {
+      const err = e as ApiError
+      if (err.status === 429) {
+        lock(err)
+        return
+      }
+      if (err.code === "identity_pending_approval") {
+        toast.info(t("auth.sso.pending.title"), {
+          description: t("auth.sso.pending.description", { email: ldapUsername }),
+        })
+      } else if (err.code === "invalid_credentials") {
+        toast.error(t("auth.toast.loginFailed"), {
+          description: t("auth.toast.invalidCredentialsDescription"),
+        })
+      } else if (err.code === "provider_not_found") {
+        toast.error(t("auth.toast.loginFailed"), {
+          description: t("auth.ldap.providerNotFound"),
+        })
+      } else {
+        toast.error(t("auth.toast.loginFailed"), { description: err.message })
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function submitWebauthn() {
+    if (!pendingToken) return
+    setLoading(true)
+    try {
+      const options = await api.getWebauthnAuthOptions(pendingToken)
+      const assertion = await getWebauthnAssertion(options)
+      const res = await api.verifyWebauthnAuth(pendingToken, assertion)
+      if (res.token) {
+        auth.set(res.token)
+        onAuthed()
+        navigate("/", { replace: true })
+      }
+    } catch (e) {
+      const err = e as ApiError & { code?: string }
+      if (err.status === 429) {
+        lock(err)
+        return
+      }
+      const description =
+        err.code === "not_supported"
+          ? t("auth.webauthn.notSupported")
+          : err.code === "cancelled"
+            ? t("auth.webauthn.cancelled")
+            : err.code === "mfa_not_configured"
+              ? t("auth.webauthn.noCredentials")
+              : err.code === "mfa_code_invalid"
+              ? t("auth.toast.invalidMfaDescription")
+              : err.code === "mfa_token_invalid"
+                ? t("auth.webauthn.challengeExpired")
+                : err.code === "session_invalid"
+                  ? t("auth.webauthn.sessionInvalid")
+                  : err.message
+      toast.error(t("auth.webauthn.authFailed"), { description })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const lockVisible = remainingSec > 0;
   const disabled = loading || lockVisible;
 
@@ -205,7 +288,62 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
         </div>
       )}
 
-      {!pendingToken ? (
+      {selectedLdap ? (
+        <div className="flex flex-col gap-4">
+          <div className="mb-1">
+            <Heading level="h2" className="text-base font-semibold text-ui-fg-base">
+              {t("auth.ldap.title", { name: selectedLdap.name })}
+            </Heading>
+            <Text className="text-sm text-ui-fg-subtle">
+              {t("auth.ldap.subtitle")}
+            </Text>
+          </div>
+
+          <div>
+            <Label size="small" className="mb-1.5 block text-ui-fg-subtle">
+              {t("auth.ldap.usernameLabel")}
+            </Label>
+            <Input
+              value={ldapUsername}
+              onChange={(e) => setLdapUsername(e.target.value)}
+              placeholder={t("auth.ldap.usernamePlaceholder")}
+              disabled={disabled}
+              className="h-10 rounded-lg disabled:opacity-50"
+            />
+          </div>
+
+          <div>
+            <Label size="small" className="mb-1.5 block text-ui-fg-subtle">
+              {t("auth.login.passwordLabel")}
+            </Label>
+            <Input
+              type="password"
+              value={ldapPassword}
+              onChange={(e) => setLdapPassword(e.target.value)}
+              disabled={disabled}
+              className="h-10 rounded-lg disabled:opacity-50"
+            />
+          </div>
+
+          <Button
+            onClick={submitLdapCredentials}
+            isLoading={loading}
+            disabled={disabled}
+            className="mt-1 h-10 w-full rounded-lg disabled:opacity-50"
+          >
+            {t("auth.ldap.submitButton")}
+          </Button>
+
+          <Button
+            variant="secondary"
+            onClick={() => setSelectedLdap(null)}
+            disabled={disabled}
+            className="h-10 w-full rounded-lg disabled:opacity-50"
+          >
+            {t("auth.ldap.backToLocal")}
+          </Button>
+        </div>
+      ) : !pendingToken ? (
         <div className="flex flex-col gap-4">
 
           {/* Email */}
@@ -255,7 +393,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
             {t("auth.login.submitButton")}
           </Button>
 
-          {/* SSO : boutons vers les providers OIDC/OAuth2/SAML activés (sous le login classique) */}
+          {/* SSO : boutons vers les providers OIDC/OAuth2/SAML/LDAP activés */}
           {ssoProviders && ssoProviders.length > 0 && (
             <>
               <div className="flex items-center gap-3">
@@ -272,8 +410,12 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
                     key={p.id}
                     variant="secondary"
                     onClick={() => {
-                      const base = p.kind === "saml" ? "/api/auth/saml" : "/api/auth/sso"
-                      window.location.href = `${base}/${encodeURIComponent(p.id)}/login`
+                      if (p.kind === "ldap") {
+                        setSelectedLdap(p)
+                      } else {
+                        const base = p.kind === "saml" ? "/api/auth/saml" : "/api/auth/sso"
+                        window.location.href = `${base}/${encodeURIComponent(p.id)}/login`
+                      }
                     }}
                     disabled={disabled}
                     className="h-10 w-full rounded-lg disabled:opacity-50"
@@ -315,6 +457,24 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
             className="h-10 w-full rounded-lg disabled:opacity-50"
           >
             {t("auth.mfa.submitButton")}
+          </Button>
+
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-ui-border-base" />
+            <Text className="text-xs uppercase tracking-wide text-ui-fg-muted">
+              {t("auth.mfa.orWebauthn")}
+            </Text>
+            <div className="h-px flex-1 bg-ui-border-base" />
+          </div>
+
+          <Button
+            variant="secondary"
+            onClick={submitWebauthn}
+            isLoading={loading}
+            disabled={disabled}
+            className="h-10 w-full rounded-lg disabled:opacity-50"
+          >
+            {t("auth.mfa.webauthnButton")}
           </Button>
         </div>
       )}

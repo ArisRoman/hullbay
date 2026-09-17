@@ -64,6 +64,7 @@ export type AuthErrorCode =
   | "mfa_token_invalid"
   | "mfa_code_invalid"
   | "mfa_not_configured"
+  | "webauthn_not_configured"
   | "mfa_enrollment_missing"
   | "mfa_not_enabled"
   | "password_incorrect"

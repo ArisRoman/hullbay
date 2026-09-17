@@ -9,6 +9,35 @@
     "delete": "Supprimer",
     "confirm": "Confirmer"
   },
+  "apiErrors": {
+    "unauthorized": "Authentification requise.",
+    "forbidden": "Accès refusé : permissions insuffisantes.",
+    "mfa_not_enabled": "Double authentification non activée — veuillez d'abord configurer la MFA.",
+    "token_invalid": "Session invalide ou expirée.",
+    "session_invalid": "Session invalide ou expirée.",
+    "rate_limited": "Trop de tentatives. Veuillez patienter avant de réessayer.",
+    "invalid_credentials": "Identifiants incorrects.",
+    "identity_pending_approval": "Cette identité est en attente d'approbation par un administrateur.",
+    "provider_not_found": "Fournisseur d'authentification introuvable ou désactivé.",
+    "provider_conflict": "Un fournisseur porte déjà cet identifiant.",
+    "invalid_config": "Configuration du fournisseur invalide.",
+    "unsupported_kind": "Type de protocole non pris en charge.",
+    "cannot_disable_last_provider": "Impossible de désactiver le dernier fournisseur actif.",
+    "cannot_delete_local_provider": "Le fournisseur local ne peut pas être supprimé.",
+    "cannot_delete_last_provider": "Impossible de supprimer le dernier fournisseur actif.",
+    "provider_in_use": "Des utilisateurs sont encore rattachés à ce fournisseur.",
+    "provider_pendings_exist": "Des approbations en attente font référence à ce fournisseur.",
+    "untestable_kind": "Ce type de fournisseur ne peut pas être testé.",
+    "ldap_unreachable": "Serveur LDAP injoignable ou certificat TLS invalide.",
+    "mfa_code_invalid": "Code ou signature de validation invalide.",
+    "mfa_token_invalid": "Délai de vérification dépassé. Veuillez réessayer.",
+    "mfa_not_configured": "Méthode de double authentification non configurée.",
+    "user_not_found": "Utilisateur introuvable.",
+    "validation_failed": "Données de formulaire invalides.",
+    "mfa_enrollment_missing": "Aucun enrôlement MFA en cours.",
+    "password_incorrect": "Le mot de passe actuel est incorrect.",
+    "webauthn_not_configured": "L'authentification par clé de sécurité n'est pas configurée sur le serveur."
+  },
   "bootstrap": {
     "title": "Bienvenue sur hullbay",
     "description": "Aucun compte n'existe encore. Créez le compte administrateur (owner) qui pilotera l'infrastructure. Vous pourrez ensuite déléguer un accès limité à un employé et activer la double authentification.",
@@ -39,7 +68,9 @@
       "instruction": "Saisissez le code de votre application d'authentification.",
       "codePlaceholder": "123456",
       "codeLabel": "Code de vérification",
-      "submitButton": "Valider"
+      "submitButton": "Valider",
+      "webauthnButton": "Utiliser une clé de sécurité ou Passkey",
+      "orWebauthn": "ou"
     },
     "toast": {
       "loginFailed": "Connexion échouée",
@@ -67,7 +98,8 @@
       "copied": "Copié",
       "codeHint": "Saisissez le code à 6 chiffres affiché dans votre application.",
       "verificationCodeLabel": "Code de vérification",
-      "confirmButton": "Confirmer l'activation"
+      "confirmButton": "Confirmer l'activation",
+      "passkeyOptional": "Optionnel : ajoutez une clé de sécurité (passkey) pour vous connecter sans code à l'avenir. Vous pouvez aussi le faire plus tard dans Paramètres → Clés de sécurité."
     },
     "sso": {
       "signInWith": "Continuer avec {{name}}",
@@ -77,6 +109,23 @@
         "title": "Compte en attente d'approbation",
         "description": "Le compte {{email}} est en attente de validation par un administrateur. Tu seras notifié(e) par e-mail une fois l'accès approuvé."
       }
+    },
+    "ldap": {
+      "title": "Connexion {{name}}",
+      "subtitle": "Saisissez vos identifiants d'entreprise.",
+      "usernameLabel": "Nom d'utilisateur",
+      "usernamePlaceholder": "jdupont ou jdupont@corp.local",
+      "submitButton": "Se connecter avec l'annuaire",
+      "backToLocal": "Retour à la connexion standard",
+      "providerNotFound": "Fournisseur LDAP introuvable ou désactivé."
+    },
+    "webauthn": {
+      "authFailed": "Authentification WebAuthn échouée",
+      "notSupported": "Ce navigateur ne prend pas en charge les clés de sécurité WebAuthn.",
+      "cancelled": "Opération WebAuthn annulée.",
+      "sessionInvalid": "Session expirée ou invalide. Veuillez vous reconnecter.",
+      "challengeExpired": "Délai de validation dépassé. Veuillez réessayer.",
+      "noCredentials": "Aucune clé de sécurité n'est enregistrée sur ce compte. Connectez-vous d'abord avec un code, puis ajoutez une clé dans Paramètres → Clés de sécurité."
     }
   },
   "nav": {
@@ -243,7 +292,9 @@
         "password": { "changed": "Mot de passe modifié" },
         "saml": { "failed": "Échec SAML" },
         "provider": { "created": "Fournisseur créé", "updated": "Fournisseur modifié", "deleted": "Fournisseur supprimé" },
-        "pending": { "created": "Identité en attente", "approved": "Identité approuvée", "rejected": "Identité rejetée" }
+        "pending": { "created": "Identité en attente", "approved": "Identité approuvée", "rejected": "Identité rejetée" },
+        "webauthn": { "registered": "Clé WebAuthn enregistrée", "deleted": "Clé WebAuthn supprimée" },
+        "ldap": { "failed": "Échec LDAP" }
       },
       "autoscale": { "applied": "Autoscaling appliqué" },
       "prune": { "finished": "Élagage terminé" },
@@ -548,7 +599,7 @@
   },
   "providers": {
     "pageTitle": "Authentification",
-    "pageSubtitle": "SSO (OIDC / OAuth2 / SAML) : les providers sont configurés ici, les identités externes approuvées par tenant.",
+    "pageSubtitle": "SSO & Annuaire (OIDC / OAuth2 / SAML / LDAP) : les providers sont configurés ici, les identités externes approuvées par tenant.",
     "tab": {
       "providers": "Providers",
       "pendings": "Approbations en attente"
@@ -623,7 +674,16 @@
       "entryPoint": "Entry point (ACS)",
       "callbackUrl": "Callback URL",
       "audience": "Audience (optionnel)",
-      "acceptedClockSkewMs": "Dérive d'horloge autorisée (ms, optionnel)"
+      "acceptedClockSkewMs": "Dérive d'horloge autorisée (ms, optionnel)",
+      "ldapUrl": "URL du serveur LDAP (ex. ldap://ldap.corp:389 ou ldaps://...)",
+      "bindDn": "DN du compte de service (Bind DN, optionnel)",
+      "bindSecret": "Mot de passe du compte de service (Bind Secret)",
+      "searchBase": "Base de recherche utilisateurs (ex. ou=users,dc=corp)",
+      "searchFilter": "Filtre de recherche (ex. (&(objectClass=person)(sAMAccountName={{username}})))",
+      "stableAttr": "Attribut stable (objectGUID pour AD, entryUUID pour OpenLDAP)",
+      "groupSearchBase": "Base de recherche groupes (optionnel)",
+      "groupFilter": "Filtre de recherche groupes (optionnel)",
+      "timeoutMs": "Délai d'attente (ms, optionnel)"
     },
     "test": {
       "running": "Test en cours…"
@@ -678,6 +738,11 @@
   },
   "settings": {
     "pageTitle": "Paramètres",
+    "tabs": {
+      "profile": "Profil",
+      "security": "Sécurité",
+      "domain": "Domaine"
+    },
     "domain": {
       "title": "Nom de domaine",
       "hint": "Facultatif hors production — configure un domaine public si tu veux tester le HTTPS automatique.",
@@ -702,6 +767,30 @@
       "confirmLabel": "Confirmer le nouveau mot de passe",
       "mismatchError": "Les mots de passe ne correspondent pas.",
       "submitButton": "Changer le mot de passe"
+    },
+    "passkeys": {
+      "title": "Clés de sécurité",
+      "hint": "Les passkeys permettent de se connecter avec Touch ID, Windows Hello ou une clé matérielle, sans code.",
+      "unsupported": "Ce navigateur ne prend pas en charge les passkeys.",
+      "empty": "Aucune clé de sécurité enregistrée pour l'instant.",
+      "defaultName": "Clé de sécurité",
+      "nameLabel": "Nom de la clé",
+      "namePlaceholder": "ex. Touch ID du MacBook",
+      "addButton": "Ajouter une clé de sécurité",
+      "added": "Clé de sécurité ajoutée",
+      "removed": "Clé de sécurité supprimée",
+      "remove": "Supprimer cette clé de sécurité",
+      "addedAt": "Ajoutée",
+      "lastUsed": "Dernière utilisation",
+      "neverUsed": "Jamais utilisée",
+      "confirm": {
+        "title": "Supprimer cette clé de sécurité ?",
+        "description": "« {{name}} » ne pourra plus te connecter. Garde au moins un autre moyen de connexion pour éviter tout blocage.",
+        "confirmText": "Supprimer"
+      },
+      "errors": {
+        "registerFailed": "Impossible d'ajouter la clé de sécurité"
+      }
     },
     "toast": {
       "passwordChanged": "Mot de passe modifié"

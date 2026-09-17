@@ -11,6 +11,7 @@ import { requireRole, currentUser } from "../authorization/rbac"
 import { authRateLimiter } from "../rate-limit"
 import { registerUsersRoutes } from "./users.routes"
 import { authService } from "../service"
+import { securityPolicy } from "../policies/security-policy.service"
 
 function serializeError(err: unknown, fallbackStatus = 400) {
   const message = err instanceof Error ? err.message : String(err)
@@ -195,21 +196,32 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     async (req) => {
       const user = (req as FastifyRequest & { user: { sub: string } }).user
       const u = await prisma.user.findUnique({ where: { id: user.sub } })
-      // mfaEnabled vit sur l'identité locale depuis la Phase 2 ; on reste sur
-      // prisma.user pour id/email/role (compat), identity en lookup best-effort.
-      const identity = await prisma.authIdentity?.findFirst?.({
-        where: { userId: user.sub, kind: "local" },
-        select: { mfaEnabled: true },
-      })
+      // mfaEnabled vit sur les AuthIdentity ; on reste sur prisma.user pour
+      // id/email/role (compat), identities en lookup best-effort.
+      const identities =
+        (await prisma.authIdentity?.findMany?.({
+          where: { userId: user.sub },
+          select: { kind: true, mfaEnabled: true },
+        })) ?? []
+      const local = identities.find((i) => i.kind === "local")
+      // Repli sur User.mfaEnabled (colonnes legacy) si la table identities n'est
+      // pas interrogeable (mocks/tests) — sinon on resterait bloqué à false.
+      const mfaEnabled = identities.length
+        ? identities.some((i) => i.mfaEnabled)
+        : ((u as { mfaEnabled?: boolean } | null)?.mfaEnabled ?? false)
+      // Compte local : enrôlement obligatoire. Compte externe (LDAP/OIDC/SAML) :
+      // pas de 2e MFA locale, sauf si la politique cible le rôle.
+      const policyRequires =
+        securityPolicy.getPolicy().mfaRequireRoles.includes((u?.role ?? "").toLowerCase())
+      const mfaRequired = local
+        ? !local.mfaEnabled
+        : Boolean(u) && policyRequires && !mfaEnabled
       return {
         id: u?.id,
         email: u?.email,
         role: u?.role,
-        mfaEnabled: identity?.mfaEnabled ?? (u as { mfaEnabled?: boolean } | null)?.mfaEnabled ?? false,
-        // true uniquement pour un utilisateur local non-enrôlé ; les
-        // utilisateurs SSO (pas d'identité locale) ne sont pas concernés
-        // par l'enrôlement TOTP local.
-        mfaRequired: identity ? !identity.mfaEnabled : false,
+        mfaEnabled,
+        mfaRequired,
       }
     },
   )

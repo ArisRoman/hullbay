@@ -1,4 +1,5 @@
 import type { Project, ProjectGraph, NodeType, Node, DatabaseConfig } from "@hullbay/shared";
+import i18n from "../i18n/config";
 
 /**
  * base64 UTF-8-safe d'un brouillon de config (query GET). `btoa` brut jette une
@@ -46,14 +47,30 @@ function createApiError(message: string, status: number, code?: string, details?
 }
 
 /**
+ * Traduit un code d'erreur backend stable via la table `apiErrors.*` des locales.
+ * Renvoie null si le code est absent ou non traduit (le message backend sert
+ * alors de repli). Les messages backend sont en français (langue produit) ; la
+ * traduction par code permet une UI bilingue sans coupler le front aux libellés.
+ */
+function translateApiCode(code: unknown): string | null {
+  if (typeof code !== "string" || !code) return null;
+  const key = `apiErrors.${code}`;
+  return i18n.exists(key) ? i18n.t(key) : null;
+}
+
+/**
  * Construit un message d'erreur lisible depuis le corps d'une réponse non-OK.
  * Le backend renvoie `error` soit comme string, soit comme objet Zod `flatten()`
  * ({ formErrors: string[], fieldErrors: Record<string, string[]> }). Sans ce
  * traitement, un `.toString()` naïf affiche "[object Object]".
  */
 function extractError(body: unknown, status: number): string {
+  const fromCode = translateApiCode((body as { code?: unknown })?.code);
+  if (fromCode) return fromCode;
   const err = (body as { error?: unknown })?.error;
-  if (typeof err === "string" && err.trim()) return err;
+  if (typeof err === "string" && err.trim()) {
+    return translateApiCode(err) ?? err;
+  }
   if (err && typeof err === "object") {
     const zod = err as {
       formErrors?: string[];
@@ -69,6 +86,8 @@ function extractError(body: unknown, status: number): string {
     }
     if (parts.length) return parts.join(" · ");
   }
+  const msg = (body as { message?: unknown })?.message;
+  if (typeof msg === "string" && msg.trim()) return msg;
   return `HTTP ${status}`;
 }
 
@@ -169,6 +188,32 @@ export const api = {
     req<{ sessions: { id: string; jti: string; providerId: string; createdAt: string; expiresAt: string; lastSeenAt: string; ip: string | null; userAgent: string | null; current: boolean }[] }>("/api/auth/sessions"),
   revokeSession: (jti: string) =>
     req<void>(`/api/auth/sessions/${jti}`, { method: "DELETE" }),
+  ldapLogin: (providerId: string, username: string, password: string) =>
+    req<{ mfaRequired: boolean; token?: string; pendingToken?: string }>(
+      `/api/auth/ldap/${encodeURIComponent(providerId)}/login`,
+      { method: "POST", body: JSON.stringify({ username, password }) },
+    ),
+  getWebauthnRegisterOptions: () =>
+    req<any>("/api/auth/mfa/webauthn/register/options", { method: "POST" }),
+  verifyWebauthnRegister: (response: any, name?: string) =>
+    req<{ verified: boolean; credentialId: string }>("/api/auth/mfa/webauthn/register/verify", {
+      method: "POST",
+      body: JSON.stringify({ response, name }),
+    }),
+  getWebauthnAuthOptions: (pendingToken?: string) =>
+    req<any>("/api/auth/mfa/webauthn/auth/options", {
+      method: "POST",
+      body: JSON.stringify({ pendingToken }),
+    }),
+  verifyWebauthnAuth: (pendingToken: string | undefined, response: any) =>
+    req<{ ok: boolean; token: string }>("/api/auth/mfa/webauthn/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ pendingToken, response }),
+    }),
+  listWebauthnCredentials: () =>
+    req<WebauthnCredentialPublic[]>("/api/auth/mfa/webauthn/credentials"),
+  deleteWebauthnCredential: (id: string) =>
+    req<void>(`/api/auth/mfa/webauthn/credentials/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // Utilisateurs (owner uniquement)
   listUsers: () => req<UserAccount[]>("/api/users"),
@@ -452,7 +497,7 @@ export type Environment = "development" | "test" | "production";
 
 export type AuthProviderPublic = {
   id: string;
-  kind: "oidc" | "oauth2" | "saml";
+  kind: "oidc" | "oauth2" | "saml" | "ldap" | "local";
   name: string;
   enabled: boolean;
 };
@@ -472,11 +517,20 @@ export type UserAccount = {
   createdAt: string;
 };
 
+export type WebauthnCredentialPublic = {
+  id: string;
+  credentialId: string;
+  name: string | null;
+  deviceType: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
 /** Provider vu de l'admin (owner) : config en clair SAUF champs sensibles,
  *  masqués par marqueur par le backend (jamais la valeur du secret). */
 export type AuthProviderAdmin = {
   id: string;
-  kind: "oidc" | "oauth2" | "saml";
+  kind: "oidc" | "oauth2" | "saml" | "ldap" | "local";
   name: string;
   enabled: boolean;
   config: Record<string, unknown>;
@@ -488,7 +542,7 @@ export const SECRET_MASK = "••••••••";
 
 export type AuthProviderUpsert = {
   id?: string;
-  kind: "oidc" | "oauth2" | "saml";
+  kind: "oidc" | "oauth2" | "saml" | "ldap";
   name: string;
   enabled?: boolean;
   config: Record<string, unknown>;

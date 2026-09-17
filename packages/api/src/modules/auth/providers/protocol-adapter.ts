@@ -10,28 +10,31 @@ import { LocalProvider } from "./local/local-provider"
 import { createOidcProvider, type OidcProviderOptions } from "./oidc/oidc-provider"
 import { createOauth2Provider, type Oauth2ProviderOptions } from "./oauth2/oauth2-provider"
 import { createSamlProvider, type SamlProviderOptions } from "./saml/saml-provider"
+import { createLdapProvider, type LdapProviderOptions } from "./ldap/ldap-provider"
 
 export type ProviderConfig =
   | OidcProviderOptions
   | Oauth2ProviderOptions
   | SamlProviderOptions
+  | LdapProviderOptions
 
 export function createProvider(kind: ProviderKind, id: string, config?: ProviderConfig): AuthProviderContract {
   switch (kind) {
     case "local":
       return new LocalProvider(id)
     case "oidc":
-      if (!config) throw new Error("adapter oidc : config manquante (issuer/clientId/redirectUri)")
+      if (!config) throw new Error("Configuration OIDC manquante (issuer/clientId/redirectUri)")
       return createOidcProvider({ ...(config as OidcProviderOptions), id })
     case "oauth2":
-      if (!config) throw new Error("adapter oauth2 : config manquante")
+      if (!config) throw new Error("Configuration OAuth2 manquante (authorizationUri/tokenUri/userinfoUri/clientId/redirectUri)")
       return createOauth2Provider({ ...(config as Oauth2ProviderOptions), id })
     case "saml":
-      if (!config) throw new Error("adapter saml : config manquante (idpCert/idpIssuer/entryPoint/callbackUrl)")
+      if (!config) throw new Error("Configuration SAML manquante (idpCert/idpIssuer/entryPoint/callbackUrl)")
       return createSamlProvider({ ...(config as SamlProviderOptions), id })
     case "ldap":
-      throw new Error(`adapter ${kind} non implémenté (implémentation Phase 5A)`)
+      if (!config) throw new Error("Configuration LDAP manquante (url/searchBase/searchFilter/stableAttr)")
+      return createLdapProvider({ ...(config as LdapProviderOptions), id })
     default:
-      throw new Error(`protocole inconnu : ${kind}`)
+      throw new Error(`Protocole inconnu : ${kind}`)
   }
 }

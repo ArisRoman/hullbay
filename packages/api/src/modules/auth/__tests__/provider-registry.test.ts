@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { ProviderRegistry } from "../registry/provider-registry";
+import { ProviderRegistry, SUPPORTED_KINDS } from "../registry/provider-registry";
 import { PROVIDER_SEEDS } from "../registry/seeds";
 
 describe("ProviderRegistry", () => {
@@ -7,6 +7,10 @@ describe("ProviderRegistry", () => {
 
   beforeEach(() => {
     registry = new ProviderRegistry();
+  });
+
+  it("déclare ldap comme kind supporté (hydratation au boot)", () => {
+    expect(SUPPORTED_KINDS).toContain("ldap");
   });
 
   it("register + get par id", () => {

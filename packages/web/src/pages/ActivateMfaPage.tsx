@@ -4,11 +4,15 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from "@tanstack/react-query"
 import { api, auth } from "../lib/api"
 import { useMe } from "../lib/useMe"
+import { PasskeysCard } from "../components/PasskeysCard"
 import { Button, Container, Heading, Input, Label, Text, toast } from "@medusajs/ui"
 import { QRCodeSVG } from "qrcode.react"
 
-// Un seul appel d'enrôlement, même en StrictMode (double mount dev).
-let enrollStarted = false
+// Un seul appel d'enrôlement, même en StrictMode (double mount dev) : on
+// mémorise la promesse pour que le mount « survivant » récupère la réponse du
+// 1er mount (démonté) — un simple booléen perdrait le résultat et laisserait
+// l'écran bloqué sur « Préparation en cours… ».
+let enrollPromise: Promise<{ otpauth: string; secret: string }> | null = null
 
 export function ActivateMfaPage() {
   const { t } = useTranslation()
@@ -25,12 +29,13 @@ export function ActivateMfaPage() {
   useEffect(() => { if (me && !me.mfaRequired) navigate("/", { replace: true }) }, [me])
 
   useEffect(() => {
-    if (enrollStarted) return
-    enrollStarted = true
     let mounted = true
     async function start() {
       try {
-        const data = await api.enrollMfa()
+        const data = await (enrollPromise ??= api.enrollMfa().catch((e) => {
+          enrollPromise = null
+          throw e
+        }))
         if (!mounted) return
         setSecret(data.secret)
         setOtpauth(data.otpauth)
@@ -79,13 +84,6 @@ export function ActivateMfaPage() {
   return (
   <div className="flex min-h-full w-full items-center justify-center bg-ui-bg-subtle px-4 py-8">
     <div className="w-full max-w-[390px]">
-
-      {/* Logo */}
-      <div className="mb-6 flex justify-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-ui-bg-base shadow-sm">
-          <div className="h-7 w-7 rounded-lg bg-ui-fg-base" />
-        </div>
-      </div>
 
       {/* Header */}
       <div className="mb-6 text-center">
@@ -188,6 +186,16 @@ export function ActivateMfaPage() {
       >
         {t("auth.mfaModal.confirmButton")}
       </Button>
+
+      {/* Clé de sécurité (optionnel) : permet d'utiliser une passkey au login
+          dès le premier enrôlement, sans devoir passer par les Paramètres.
+          L'API autorise register/options+verify pendant l'enrôlement forcé. */}
+      <div className="mt-6">
+        <Text className="mb-3 text-xs leading-5 text-ui-fg-subtle">
+          {t("auth.mfaModal.passkeyOptional")}
+        </Text>
+        <PasskeysCard />
+      </div>
     </div>
   </div>
 )

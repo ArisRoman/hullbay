@@ -15,6 +15,7 @@ import { sessionManager } from "./session-manager"
 import { resolveIdentity } from "./identity-mapping"
 import { startTotpEnrollment, totpUri, verifyTotpCode } from "../mfa/totp"
 import { ensureDefaultTenant } from "../identity/auth-identity.service"
+import { securityPolicy } from "../policies/security-policy.service"
 
 // ── Trace helper (fire-and-forget) ──
 
@@ -34,8 +35,61 @@ async function findLocalIdentityByUserId(userId: string) {
   })
 }
 
+/**
+ * Résout l'identité qui porte les facteurs MFA de l'utilisateur : priorité à
+ * l'identité locale (facteurs historiques TOTP/WebAuthn), puis à défaut la
+ * première identité de l'utilisateur (LDAP/OIDC/SAML). Permet à un compte
+ * externe d'enrôler/vérifier une MFA locale quand la politique l'exige.
+ */
+async function findMfaIdentityByUserId(userId: string) {
+  return (
+    (await prisma.authIdentity.findFirst({
+      where: { userId, kind: "local" },
+      orderBy: { createdAt: "asc" },
+    })) ??
+    (await prisma.authIdentity.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "asc" },
+    }))
+  )
+}
+
 async function getUser(userId: string) {
   return prisma.user.findUniqueOrThrow({ where: { id: userId } })
+}
+
+/** true si l'utilisateur a un facteur MFA enrôlé et actif (TOTP ou WebAuthn). */
+export async function userHasMfaFactor(userId: string): Promise<boolean> {
+  const factor = await prisma.authIdentity.findFirst({
+    where: {
+      userId,
+      mfaEnabled: true,
+      OR: [{ mfaSecretEnc: { not: null } }, { webauthnCredentials: { some: {} } }],
+    },
+    select: { id: true },
+  })
+  return Boolean(factor)
+}
+
+/**
+ * État MFA d'un utilisateur, indépendant du provider :
+ * - compte local : enrôlement obligatoire tant que mfaEnabled est false ;
+ * - compte externe : aucune 2e MFA locale par défaut, sauf si la politique
+ *   (SecurityPolicy.mfaRequireRoles) cible le rôle ET qu'aucun facteur n'existe.
+ */
+export async function getUserMfaState(userId: string): Promise<{ mfaEnabled: boolean; mfaRequired: boolean }> {
+  const identities = await prisma.authIdentity.findMany({
+    where: { userId },
+    select: { kind: true, mfaEnabled: true },
+  })
+  const local = identities.find((i) => i.kind === "local")
+  const mfaEnabled = identities.some((i) => i.mfaEnabled)
+  if (local) {
+    return { mfaEnabled, mfaRequired: !local.mfaEnabled }
+  }
+  const user = await getUser(userId)
+  const required = securityPolicy.getPolicy().mfaRequireRoles.includes(user.role.toLowerCase())
+  return { mfaEnabled, mfaRequired: required && !mfaEnabled }
 }
 
 // ── Opérations publiques ──
@@ -103,7 +157,7 @@ export async function login(email: string, password: string) {
 export async function verifyMfa(pendingToken: string, code: string) {
   const { sub } = sessionManager.verifyPending(pendingToken)
 
-  const identity = await findLocalIdentityByUserId(sub)
+  const identity = await findMfaIdentityByUserId(sub)
   if (!identity?.mfaSecretEnc) {
     // 401 (et non 400) : pas d'oracle distinguant « MFA non configurée » d'un
     // code invalide pour un porteur de pendingToken.
@@ -129,9 +183,9 @@ export async function startMfaEnrollment(userId: string) {
   const user = await getUser(userId)
   const label = user.email ?? userId
 
-  const identity = await findLocalIdentityByUserId(userId)
+  const identity = await findMfaIdentityByUserId(userId)
   if (!identity) {
-    throw new AuthError("mfa_not_configured", "identité locale introuvable", 400)
+    throw new AuthError("mfa_not_configured", "identité introuvable", 400)
   }
 
   const { encryptSecret, decryptSecret } = await import("../secrets/secret-encryption-service")
@@ -155,7 +209,7 @@ export async function startMfaEnrollment(userId: string) {
 }
 
 export async function confirmMfaEnrollment(userId: string, code: string) {
-  const identity = await findLocalIdentityByUserId(userId)
+  const identity = await findMfaIdentityByUserId(userId)
   if (!identity?.mfaSecretEnc) {
     throw new AuthError("mfa_enrollment_missing", "aucun enrôlement en cours", 400)
   }

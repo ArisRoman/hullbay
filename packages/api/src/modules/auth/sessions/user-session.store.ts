@@ -13,7 +13,7 @@ export interface SessionHandle {
 }
 
 export interface SessionStore {
-  signSession(userId: string, role: string, mfaEnabled: boolean): string
+  signSession(userId: string, role: string, mfaEnabled: boolean, providerId?: string): string
   verifySession(token: string): SessionHandle
   signPending(userId: string): string
   verifyPending(token: string): { sub: string }
@@ -102,7 +102,7 @@ async function markRevoked(jti: string, ttlMs: number): Promise<void> {
  * Ne bloque jamais la vérification synchrone. La révocation inter-process passe
  * par Redis quand il est disponible, puis par la DB (source de vérité).
  */
-function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabled?: boolean; exp?: number }): void {
+function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabled?: boolean; exp?: number; providerId?: string }): void {
   void (async () => {
     try {
       if (!prisma.userSession) return
@@ -135,7 +135,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
         }
         const expiresAt = decoded.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + ttl)
         await prisma.userSession
-          .create({ data: { jti, userId: decoded.sub!, providerId: "local", expiresAt } })
+          .create({ data: { jti, userId: decoded.sub!, providerId: decoded.providerId ?? "local", expiresAt } })
           .catch(() => {})
         await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false }, ttl)
         return
@@ -155,16 +155,16 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
 }
 
 export class UserSessionStore implements SessionStore {
-  signSession(userId: string, role: string, mfaEnabled: boolean): string {
+  signSession(userId: string, role: string, mfaEnabled: boolean, providerId = "local"): string {
     const jti = randomUUID()
     const ttl = sessionTtlMs()
     const expiresAt = new Date(Date.now() + ttl)
     const token = jwksService.signPayload(
-      { sub: userId, role, mfaEnabled, jti },
+      { sub: userId, role, mfaEnabled, jti, providerId },
       { expiresIn: Math.floor(ttl / 1000), audience: AUD_SESSION },
     )
     const handle: SessionHandle = { sub: userId, role, mfaEnabled }
-    if (prisma.userSession) prisma.userSession.create({ data: { jti, userId, providerId: "local", expiresAt } }).catch(() => {})
+    if (prisma.userSession) prisma.userSession.create({ data: { jti, userId, providerId, expiresAt } }).catch(() => {})
     cacheSession(jti, handle, ttl).catch(() => {})
     return token
   }
@@ -176,6 +176,7 @@ export class UserSessionStore implements SessionStore {
       mfaEnabled?: boolean
       jti?: string
       exp?: number
+      providerId?: string
     }
     if (!decoded.sub || !decoded.role) throw new Error("token de session invalide")
 

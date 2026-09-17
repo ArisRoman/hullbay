@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
+    "e2e:real": "playwright test --config playwright.real.config.ts",
     "e2e:install": "playwright install chromium",
     "i18n:validate": "node scripts/validate-i18n.cjs"
   },

@@ -30,6 +30,9 @@ const AUDITED: Record<string, string> = {
   "auth.mfa.failed": "auth.mfa.failed",
   "auth.password.changed": "auth.password.changed",
   "auth.saml.failed": "auth.saml.failed",
+  "auth.ldap.failed": "auth.ldap.failed",
+  "auth.webauthn.registered": "auth.webauthn.registered",
+  "auth.webauthn.deleted": "auth.webauthn.deleted",
   // Phase 5A1 — CRUD providers + approbation des identités externes.
   "auth.provider.created": "auth.provider.created",
   "auth.provider.updated": "auth.provider.updated",

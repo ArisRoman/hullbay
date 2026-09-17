@@ -32,7 +32,7 @@ export const SENSITIVE_FIELDS_BY_KIND: Record<ProviderKind, string[]> = {
   oidc: ["clientSecret"],
   oauth2: ["clientSecret"],
   saml: [],
-  ldap: [],
+  ldap: ["bindSecret"],
 }
 
 export const PROVIDER_SEEDS: ProviderSeed[] = [

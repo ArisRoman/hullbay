@@ -40,6 +40,9 @@ const ACTIONS = [
   "auth.pending.created",
   "auth.pending.approved",
   "auth.pending.rejected",
+  "auth.webauthn.registered",
+  "auth.webauthn.deleted",
+  "auth.ldap.failed",
 ]
 
 /** Libellé traduit d'une action d'audit, repli sur la clé brute si inconnue. */

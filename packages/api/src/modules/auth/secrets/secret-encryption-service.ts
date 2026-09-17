@@ -102,6 +102,14 @@ function decryptInternal(kind: SecretKind, payload: string, keyHex?: string): st
   ]).toString("utf8")
 }
 
+/** Chiffre une valeur unique dans le scope "provider" (delta de config
+ *  AuthProvider) — à utiliser au lieu de la façade compat `encryptSecret`
+ *  (scope "mfa") pour tout secret de provider, sinon la lecture
+ *  (`decryptObject`, scope provider) échoue. */
+export function encryptProviderSecret(plain: string): string {
+  return encrypt("provider", plain)
+}
+
 /** Chiffre les champs sensibles d'un objet (utilisé pour AuthProvider.config). */
 export function encryptObject<T extends Record<string, unknown>>(
   config: T,

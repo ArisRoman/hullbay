@@ -112,10 +112,31 @@ model AuthIdentity {
   createdAt   DateTime @default(now())
   lastLoginAt DateTime?
 
+  webauthnCredentials WebauthnCredential[]
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([providerId, issuer, subject])
   @@index([userId])
+}
+
+// Credentials WebAuthn / Passkeys 
+model WebauthnCredential {
+  id           String       @id @default(cuid())
+  identityId   String
+  credentialId String       @unique
+  publicKey    Bytes
+  counter      BigInt       @default(0)
+  deviceType   String?
+  backedUp     Boolean      @default(false)
+  transports   String?
+  name         String?
+  createdAt    DateTime     @default(now())
+  lastUsedAt   DateTime?
+
+  identity     AuthIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+
+  @@index([identityId])
 }
 
 model Tenant {
