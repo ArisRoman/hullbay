@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma"
 import type { SecurityPolicy as PrismaSecurityPolicy } from "@prisma/client"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 
 export interface SecurityPolicy {
   mfaRequireRoles: string[]
@@ -46,38 +47,66 @@ function toPolicy(p: PrismaSecurityPolicy): SecurityPolicy {
 }
 
 export class SecurityPolicyService {
-  private policy: SecurityPolicy = { ...DEFAULTS }
+  private policiesByTenant = new Map<string, SecurityPolicy>()
+
+  private ensurePolicy(tenantId: string): SecurityPolicy {
+    let policy = this.policiesByTenant.get(tenantId)
+    if (!policy) {
+      policy = { ...DEFAULTS }
+      this.policiesByTenant.set(tenantId, policy)
+    }
+    return policy
+  }
 
   constructor() {
-    if (prisma.securityPolicy) {
-      prisma.securityPolicy.findUnique({ where: { id: "singleton" } })
-        .then((p) => { if (p) this.policy = toPolicy(p) })
-        .catch(() => {})
-      prisma.securityPolicy.upsert({
-        where: { id: "singleton" },
-        create: { id: "singleton", mfaRequireRoles: "[]", loginFailLimit: 5, loginFailWindowMs: 60000, lockoutMs: 300000, sessionTtlMs: 43200000, providerAllowlist: "[]" },
-        update: {},
-      }).catch(() => {})
-    }
+    if (!prisma.securityPolicy) return
+    // Phase 5B : une policy PAR tenant (id fixe remplacé par `tenantId` unique).
+    // Rétrocompat : la ligne singleton existante est rattachée au tenant par défaut
+    // (backfill migration) ; on l'utilise pour amorcer la policy par défaut.
+    prisma.securityPolicy.findUnique({ where: { tenantId: DEFAULT_TENANT_ID } })
+      .then((p) => { if (p) this.policiesByTenant.set(DEFAULT_TENANT_ID, toPolicy(p)) })
+      .catch(() => {})
+    prisma.securityPolicy.upsert({
+      where: { tenantId: DEFAULT_TENANT_ID },
+      create: { tenantId: DEFAULT_TENANT_ID, mfaRequireRoles: "[]", loginFailLimit: 5, loginFailWindowMs: 60000, lockoutMs: 300000, sessionTtlMs: 43200000, providerAllowlist: "[]" },
+      update: {},
+    }).catch(() => {})
   }
 
+  /** Policy du tenant par défaut (contextes non-requête : TTL session, rate-limit). */
   getPolicy(): SecurityPolicy {
-    return this.policy
+    return this.ensurePolicy(DEFAULT_TENANT_ID)
   }
 
-  override(policy: Partial<SecurityPolicy>): void {
-    this.policy = { ...this.policy, ...policy }
+  /** Policy d'un tenant précis (routes owner). Charge depuis la DB, cache mémoire. */
+  async getPolicyForTenant(tenantId: string): Promise<SecurityPolicy> {
+    if (tenantId === DEFAULT_TENANT_ID) return this.getPolicy()
+    if (!this.policiesByTenant.has(tenantId)) {
+      const row = await prisma.securityPolicy.findUnique({ where: { tenantId } })
+      this.policiesByTenant.set(tenantId, row ? toPolicy(row) : { ...DEFAULTS })
+    }
+    return this.policiesByTenant.get(tenantId)!
+  }
+
+  /**
+   * Remplace partiellement la policy (tenant par défaut si non précisé) et
+   * persiste en DB (upsert par tenantId).
+   */
+  override(policy: Partial<SecurityPolicy>, tenantId = DEFAULT_TENANT_ID): void {
+    const current = this.ensurePolicy(tenantId)
+    this.policiesByTenant.set(tenantId, { ...current, ...policy })
+    const merged = this.policiesByTenant.get(tenantId)!
     const dbData = {
-      mfaRequireRoles: JSON.stringify(policy.mfaRequireRoles ?? this.policy.mfaRequireRoles),
-      loginFailLimit: policy.loginFailLimit ?? this.policy.loginFailLimit,
-      loginFailWindowMs: policy.loginFailWindowMs ?? this.policy.loginFailWindowMs,
-      lockoutMs: policy.lockoutMs ?? this.policy.lockoutMs,
-      sessionTtlMs: policy.sessionTtlMs ?? this.policy.sessionTtlMs,
-      providerAllowlist: JSON.stringify(policy.providerAllowlist ?? this.policy.providerAllowlist),
+      mfaRequireRoles: JSON.stringify(policy.mfaRequireRoles ?? merged.mfaRequireRoles),
+      loginFailLimit: policy.loginFailLimit ?? merged.loginFailLimit,
+      loginFailWindowMs: policy.loginFailWindowMs ?? merged.loginFailWindowMs,
+      lockoutMs: policy.lockoutMs ?? merged.lockoutMs,
+      sessionTtlMs: policy.sessionTtlMs ?? merged.sessionTtlMs,
+      providerAllowlist: JSON.stringify(policy.providerAllowlist ?? merged.providerAllowlist),
     }
     if (prisma.securityPolicy) prisma.securityPolicy.upsert({
-      where: { id: "singleton" },
-      create: { id: "singleton", ...dbData },
+      where: { tenantId },
+      create: { tenantId, ...dbData },
       update: dbData,
     }).catch(() => {})
   }

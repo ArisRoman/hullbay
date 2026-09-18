@@ -3,6 +3,7 @@ import { z } from "zod"
 import { parse as parseDomain } from "tldts"
 import { settingsService } from "./service";
 import { currentUser, requireRole } from "../auth/rbac";
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver";
 import { eventBus } from "../../lib/event-bus";
 
 /**
@@ -41,7 +42,7 @@ export async function registerSettingsRoutes(app: FastifyInstance) {
                 security: [{ bearerAuth: [] }],
             },
         },
-        async () => settingsService.get(),
+        async (req) => settingsService.get((req as TenantScopedRequest).tenantId),
     )
 
     const setBody = z.object({
@@ -61,7 +62,8 @@ export async function registerSettingsRoutes(app: FastifyInstance) {
         async (req, reply) => {
             const body = req.body as { domain: string }
             try {
-                const result = await settingsService.setDomain(body.domain)
+                const reqTenant = (req as TenantScopedRequest).tenantId
+                const result = await settingsService.setDomain(body.domain, reqTenant)
                 await eventBus.emit("settings.domain.set", {
                     userId: currentUser(req)?.sub,
                     domain: body.domain,

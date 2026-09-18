@@ -5,15 +5,17 @@ import { randomUUID } from "node:crypto"
 import { AuthError } from "../providers/types"
 import { jwksService } from "../jwks/jwks.service"
 import { securityPolicy } from "../policies/security-policy.service"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 
 export interface SessionHandle {
   sub: string
   role: string
   mfaEnabled: boolean
+  tenantId?: string
 }
 
 export interface SessionStore {
-  signSession(userId: string, role: string, mfaEnabled: boolean, providerId?: string): string
+  signSession(userId: string, role: string, mfaEnabled: boolean, providerId?: string, tenantId?: string): string
   verifySession(token: string): SessionHandle
   signPending(userId: string): string
   verifyPending(token: string): { sub: string }
@@ -102,7 +104,7 @@ async function markRevoked(jti: string, ttlMs: number): Promise<void> {
  * Ne bloque jamais la vérification synchrone. La révocation inter-process passe
  * par Redis quand il est disponible, puis par la DB (source de vérité).
  */
-function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabled?: boolean; exp?: number; providerId?: string }): void {
+function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabled?: boolean; exp?: number; providerId?: string; tenantId?: string }): void {
   void (async () => {
     try {
       if (!prisma.userSession) return
@@ -137,7 +139,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
         await prisma.userSession
           .create({ data: { jti, userId: decoded.sub!, providerId: decoded.providerId ?? "local", expiresAt } })
           .catch(() => {})
-        await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false }, ttl)
+await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }, ttl)
         return
       }
 
@@ -146,7 +148,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
         return
       }
 
-      await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false }, ttl)
+      await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }, ttl)
       touchSession(jti)
     } catch {
       // best-effort : la vérification synchrone a déjà répondu
@@ -155,15 +157,15 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
 }
 
 export class UserSessionStore implements SessionStore {
-  signSession(userId: string, role: string, mfaEnabled: boolean, providerId = "local"): string {
+  signSession(userId: string, role: string, mfaEnabled: boolean, providerId = "local", tenantId = DEFAULT_TENANT_ID): string {
     const jti = randomUUID()
     const ttl = sessionTtlMs()
     const expiresAt = new Date(Date.now() + ttl)
     const token = jwksService.signPayload(
-      { sub: userId, role, mfaEnabled, jti, providerId },
+      { sub: userId, role, mfaEnabled, jti, providerId, tenantId },
       { expiresIn: Math.floor(ttl / 1000), audience: AUD_SESSION },
     )
-    const handle: SessionHandle = { sub: userId, role, mfaEnabled }
+    const handle: SessionHandle = { sub: userId, role, mfaEnabled, tenantId }
     if (prisma.userSession) prisma.userSession.create({ data: { jti, userId, providerId, expiresAt } }).catch(() => {})
     cacheSession(jti, handle, ttl).catch(() => {})
     return token
@@ -177,6 +179,7 @@ export class UserSessionStore implements SessionStore {
       jti?: string
       exp?: number
       providerId?: string
+      tenantId?: string
     }
     if (!decoded.sub || !decoded.role) throw new Error("token de session invalide")
 
@@ -197,7 +200,7 @@ export class UserSessionStore implements SessionStore {
     }
 
     reconcile(jti, decoded)
-    return { sub: decoded.sub, role: decoded.role, mfaEnabled: decoded.mfaEnabled ?? false }
+    return { sub: decoded.sub, role: decoded.role, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }
   }
 
   async revoke(jti: string): Promise<void> {

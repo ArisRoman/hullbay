@@ -25,6 +25,11 @@ model Project {
 
   clusterId   String
   cluster     Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+
+  // Phase 5B : tenant propriétaire. Nullable en transition (backfill → NOT NULL en fin de 5B).
+  tenantId    String?
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
 
 model Node {
@@ -146,9 +151,17 @@ model Tenant {
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
-  memberships Membership[]
+  memberships         Membership[]
+  // Phase 5B : ressources tenant-scopées — §4.4 du plan.
+  projects            Project[]
+  clusters            Cluster[]
+  servers             Server[]
+  registryCredentials RegistryCredential[]
+  settings            Settings[]
+  auditLogs           AuditLog[]
+  authProviders       AuthProvider[]
+  securityPolicies    SecurityPolicy[]
 }
-// Phase 5B : + clusters/settings/auditLogs/projects (tenant-scopés) — §4.4 du plan.
 
 // Rôle = propriété de la MEMBERSHIP, pas du User. Phase 2 : tenant par défaut unique.
 model Membership {
@@ -175,8 +188,12 @@ model AuthProvider {
   config    Json     @default("{}") // champs sensibles CHIFFRÉS individuellement (§8)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Phase 5B : null = provider global (disponible pour tous les tenants) — §4.2, correction N°22.
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
-// Phase 5B : + tenantId String? (null = provider global) — §4.2, correction N°22.
 
 // Identité inconnue d'un provider → ligne "pending" (jamais de User créé en auto).
 // Le workflow d'approbation effectif (owner → User + AuthIdentity + Membership)
@@ -213,7 +230,7 @@ model UserSession {
 }
 
 model SecurityPolicy {
-  id                String   @id @default("singleton")
+  id                String   @id @default(cuid())
   sessionTtlMs      Int     @default(43200000)
   mfaRequireRoles   String  @default("[]")
   loginFailLimit    Int     @default(5)
@@ -221,6 +238,10 @@ model SecurityPolicy {
   lockoutMs         Int     @default(300000)
   providerAllowlist String  @default("[]")
   updatedAt         DateTime @updatedAt
+
+  // Phase 5B : une policy PAR tenant (fin du singleton) — §4, N°21. Nullable en transition.
+  tenantId          String? @unique
+  tenant            Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model AuditLog {
@@ -235,6 +256,10 @@ model AuditLog {
   payload   Json
   createdAt DateTime @default(now())
 
+  // Phase 5B : tenant de l'action (nullable : événements système sans tenant).
+  tenantId  String?
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  @@index([tenantId])
   @@index([projectId])
   @@index([createdAt])
 }
@@ -260,6 +285,11 @@ model Server {
 
   clusterId     String
   cluster       Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+
+  // Phase 5B : tenant propriétaire (nullable en transition).
+  tenantId      String?
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
 
 // ── Credentials de registre Docker (GHCR) — pour pull sur chaque nœud ──
@@ -270,19 +300,27 @@ model RegistryCredential {
   tokenEnc  String // token/password chiffré AES-256-GCM
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Phase 5B : tenant propriétaire (nullable en transition).
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([tenantId])
 }
 
-// ── Parametre systeme - domaine public configurable ──
+// ── Parametre systeme - domaine public configurable (par tenant en 5B) ──
 model Settings {
-  id          String @id @default("singleton")
+  id          String @id @default(cuid())
   domain      String?
   updatedAt   DateTime @updatedAt
+
+  tenantId    String? @unique
+  tenant      Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── Cluster Docker swarm (TON TRAVAIL) ──
 model Cluster {
   id            String @id @default(cuid())
-  name          String @unique
+  name          String
   dockerHost    String
   caddyAdminUrl String
   isDefault     Boolean @default(false)
@@ -292,6 +330,12 @@ model Cluster {
   projects      Project[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  // Phase 5B : nom unique PAR tenant (ex-@unique global), tenant nullable en transition.
+  tenantId      String?
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }
 
 

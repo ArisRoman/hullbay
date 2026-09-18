@@ -1,29 +1,29 @@
 import { prisma } from "../../lib/prisma"
 import { applyDomainToCaddy } from "./caddy-domain"
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service"
 
-const SINGLETON_ID = "singleton"
 export class SettingsService {
-    /**Lit les parametres. Renvoie domain: null si rien n'a ete configure */
-    async get() {
+    /**Lit les parametres du tenant. Renvoie domain: null si rien n'a ete configure */
+    async get(tenantId = DEFAULT_TENANT_ID) {
         const Settings = await prisma.settings.upsert({
-            where: { id: SINGLETON_ID },
-            create: { id: SINGLETON_ID },
+            where: { tenantId },
+            create: { tenantId },
             update: {},
         })
         return { domain: Settings.domain }
     }
 
     /**
-     * Definition ou bien remplacement du nom de domaine
+     * Definition ou bien remplacement du nom de domaine (par tenant)
      * 
      * on applique d'abord la config a caddy, et on ne persiste en DB que si caddy a accepte.
      */
-    async setDomain(domain: string) {
+    async setDomain(domain: string, tenantId = DEFAULT_TENANT_ID) {
         await applyDomainToCaddy(domain)
 
         const Settings = await prisma.settings.upsert({
-            where: { id: SINGLETON_ID },
-            create: { id: SINGLETON_ID, domain },
+            where: { tenantId },
+            create: { tenantId, domain },
             update: { domain },
         })
 

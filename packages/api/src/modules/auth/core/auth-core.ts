@@ -14,7 +14,7 @@ import { providerRegistry } from "../registry/provider-registry"
 import { sessionManager } from "./session-manager"
 import { resolveIdentity } from "./identity-mapping"
 import { startTotpEnrollment, totpUri, verifyTotpCode } from "../mfa/totp"
-import { ensureDefaultTenant } from "../identity/auth-identity.service"
+import { ensureDefaultTenant, resolveTenantIdForUser } from "../identity/auth-identity.service"
 import { securityPolicy } from "../policies/security-policy.service"
 
 // ── Trace helper (fire-and-forget) ──
@@ -148,9 +148,10 @@ export async function login(email: string, password: string) {
     return { mfaRequired: true as const, pendingToken: sessionManager.signPending(result.userId) }
   }
 
+  const tenantId = await resolveTenantIdForUser(result.userId)
   return {
     mfaRequired: false as const,
-    token: sessionManager.signSession(result.userId, result.role, false),
+    token: sessionManager.signSession(result.userId, result.role, false, "local", tenantId),
   }
 }
 
@@ -176,7 +177,8 @@ export async function verifyMfa(pendingToken: string, code: string) {
   trace(AUTH_AUDIT_EVENTS.mfaSuccess, { userId: sub })
 
   const user = await getUser(sub)
-  return { token: sessionManager.signSession(sub, user.role, true) }
+  const tenantId = await resolveTenantIdForUser(sub)
+  return { token: sessionManager.signSession(sub, user.role, true, "local", tenantId) }
 }
 
 export async function startMfaEnrollment(userId: string) {
@@ -230,7 +232,8 @@ export async function confirmMfaEnrollment(userId: string, code: string) {
   trace(AUTH_AUDIT_EVENTS.mfaEnabled, { userId })
 
   const user = await getUser(userId)
-  return { ok: true, token: sessionManager.signSession(userId, user.role, true) }
+  const tenantId = await resolveTenantIdForUser(userId)
+  return { ok: true, token: sessionManager.signSession(userId, user.role, true, "local", tenantId) }
 }
 
 export async function changePassword(userId: string, currentPassword: string, newPassword: string) {

@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
 import { providerRegistry } from "../registry/provider-registry"
 import { sessionManager } from "../core/session-manager"
+import { resolveTenantIdForUser } from "../identity/auth-identity.service"
 import { userHasMfaFactor } from "../core/auth-core"
 import { eventBus } from "../../../lib/event-bus"
 import { AUTH_AUDIT_EVENTS } from "../audit-events"
@@ -106,13 +107,13 @@ export async function registerLdapRoutes(app: FastifyInstance) {
           }
           return {
             mfaRequired: false as const,
-            token: sessionManager.signSession(result.userId, result.role, false, id),
+            token: sessionManager.signSession(result.userId, result.role, false, id, await resolveTenantIdForUser(result.userId)),
           }
         }
 
         return {
           mfaRequired: false as const,
-          token: sessionManager.signSession(result.userId, result.role, true, id),
+          token: sessionManager.signSession(result.userId, result.role, true, id, await resolveTenantIdForUser(result.userId)),
         }
       } catch (err) {
         authRateLimiter.recordFailure(key)

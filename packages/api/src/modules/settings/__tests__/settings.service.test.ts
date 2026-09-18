@@ -15,7 +15,8 @@ vi.mock("../caddy-domain", () => ({
 
 import { settingsService } from "../service";
 
-const SINGLETON_ID = "singleton";
+// Phase 5B : settings par tenant (ex-singleton). Tenant par défaut en fallback.
+const DEFAULT_TENANT_ID = "tenant-default";
 
 describe("SettingsService", () => {
   beforeEach(() => {
@@ -23,9 +24,9 @@ describe("SettingsService", () => {
   });
 
   describe("get", () => {
-    it("crée la ligne singleton via upsert si elle n'existe pas encore", async () => {
+    it("crée la ligne du tenant via upsert si elle n'existe pas encore", async () => {
       mockPrisma.settings.upsert.mockResolvedValue({
-        id: SINGLETON_ID,
+        id: "s-1",
         domain: null,
         updatedAt: new Date(),
       });
@@ -34,8 +35,8 @@ describe("SettingsService", () => {
 
       expect(result).toEqual({ domain: null });
       expect(mockPrisma.settings.upsert).toHaveBeenCalledWith({
-        where: { id: SINGLETON_ID },
-        create: { id: SINGLETON_ID },
+        where: { tenantId: DEFAULT_TENANT_ID },
+        create: { tenantId: DEFAULT_TENANT_ID },
         update: {},
       });
       expect(mockApplyDomainToCaddy).not.toHaveBeenCalled();
@@ -43,7 +44,7 @@ describe("SettingsService", () => {
 
     it("renvoie le domaine existant sans le modifier", async () => {
       mockPrisma.settings.upsert.mockResolvedValue({
-        id: SINGLETON_ID,
+        id: "s-1",
         domain: "ops.exemple.com",
         updatedAt: new Date(),
       });
@@ -58,7 +59,7 @@ describe("SettingsService", () => {
     it("applique Caddy PUIS persiste en base, dans cet ordre précis", async () => {
       mockApplyDomainToCaddy.mockResolvedValue(undefined);
       mockPrisma.settings.upsert.mockResolvedValue({
-        id: SINGLETON_ID,
+        id: "s-1",
         domain: "ops.exemple.com",
         updatedAt: new Date(),
       });
@@ -71,8 +72,8 @@ describe("SettingsService", () => {
       });
       expect(mockApplyDomainToCaddy).toHaveBeenCalledWith("ops.exemple.com");
       expect(mockPrisma.settings.upsert).toHaveBeenCalledWith({
-        where: { id: SINGLETON_ID },
-        create: { id: SINGLETON_ID, domain: "ops.exemple.com" },
+        where: { tenantId: DEFAULT_TENANT_ID },
+        create: { tenantId: DEFAULT_TENANT_ID, domain: "ops.exemple.com" },
         update: { domain: "ops.exemple.com" },
       });
 

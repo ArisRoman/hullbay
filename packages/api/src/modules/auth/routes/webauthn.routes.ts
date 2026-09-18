@@ -8,6 +8,7 @@ import { createHash } from "node:crypto"
 import { prisma } from "../../../lib/prisma"
 import { authService } from "../service"
 import { sessionManager } from "../core/session-manager"
+import { resolveTenantIdForUser } from "../identity/auth-identity.service"
 import { authRateLimiter } from "../rate-limit"
 import { AuthError } from "../providers/types"
 import {
@@ -216,7 +217,7 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
 
         return {
           ok: true,
-          token: sessionManager.signSession(user.id, user.role, true),
+          token: sessionManager.signSession(user.id, user.role, true, "local", await resolveTenantIdForUser(user.id)),
         }
       } catch (err) {
         authRateLimiter.recordFailure(key)

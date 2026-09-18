@@ -9,6 +9,7 @@ import { runWithConcurrency, CLUSTER_CONCURRENCY } from "../../lib/concurrency"
 import { TunnelError } from "../../lib/ssh-tunnel"
 import { clusterService } from "../clusters/service"
 import { migrateClusterAnchorIfNeeded } from "../../workflows/cluster-anchor";
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver";
 
 
 /**
@@ -117,6 +118,7 @@ export async function registerServersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as z.infer<typeof provisionBody>;
       const { name, host, port, user, credential } = body;
+      const tenantId = (req as TenantScopedRequest).tenantId;
 
       let clusterId: string;
       let role: "manager" | "worker";
@@ -124,6 +126,9 @@ export async function registerServersRoutes(app: FastifyInstance) {
         const target = await clusterService.get(body.clusterId);
         if (!target)
           return reply.code(404).send({ error: "cluster introuvable" });
+        if (target.tenantId && target.tenantId !== tenantId) {
+          return reply.code(404).send({ error: "cluster introuvable" });
+        }
         if (target.status !== "ready") {
           return reply.code(409).send({
             error: `cluster "${target.name}" pas encore prêt (statut: ${target.status})`,
@@ -143,6 +148,7 @@ export async function registerServersRoutes(app: FastifyInstance) {
         try {
           const cluster = await clusterService.createPending(
             body.newClusterName!,
+            tenantId,
           );
           clusterId = cluster.id;
           role = "manager";
@@ -169,6 +175,7 @@ export async function registerServersRoutes(app: FastifyInstance) {
         user,
         role,
         clusterId,
+        tenantId,
       });
 
       // Provisioning en arrière-plan : on répond tout de suite, le front suit via WS.

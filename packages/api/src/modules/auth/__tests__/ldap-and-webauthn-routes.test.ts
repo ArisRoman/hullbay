@@ -157,7 +157,7 @@ describe("LDAP & WebAuthn Routes (Phase 5A3)", () => {
 
       expect(res.statusCode).toBe(200)
       expect(res.json()).toEqual({ mfaRequired: false, token: "session_token_456" })
-      expect(sessionManager.signSession).toHaveBeenCalledWith("u-owner", "owner", false, "corp-ldap")
+      expect(sessionManager.signSession).toHaveBeenCalledWith("u-owner", "owner", false, "corp-ldap", "tenant-default")
     })
 
     it("bloque les tentatives répétées (rate-limit 429)", async () => {

@@ -39,6 +39,9 @@ const mockOperatorToken = "mock_operator_token";
 const mockViewerToken = "mock_viewer_token";
 const mockInvalidToken = "mock_invalid_token";
 
+// Phase 5B : le tenant courant (défaut sans header) est passé au service.
+const DEFAULT_TENANT_ID = "tenant-default";
+
 describe("Routes /api/settings/domain", () => {
   let app: Awaited<ReturnType<typeof buildTestApp>>;
 
@@ -159,6 +162,7 @@ describe("Routes /api/settings/domain", () => {
       expect(response.json()).toEqual({ domain: "ops.exemple.com" });
       expect(mockSettingsService.setDomain).toHaveBeenCalledWith(
         "ops.exemple.com",
+        DEFAULT_TENANT_ID,
       );
     });
 
@@ -179,7 +183,7 @@ describe("Routes /api/settings/domain", () => {
         });
 
         expect(response.statusCode).toBe(200);
-        expect(mockSettingsService.setDomain).toHaveBeenCalledWith(domain);
+        expect(mockSettingsService.setDomain).toHaveBeenCalledWith(domain, DEFAULT_TENANT_ID);
       },
     );
 

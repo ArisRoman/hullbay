@@ -8,6 +8,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import { authService } from "../service"
 import { sessionManager } from "../core/session-manager"
+import { assertUserInTenant, DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
+import { effectiveTenantId, tenantFromHeader } from "../tenancy/tenant-resolver"
 
 const PUBLIC_PATHS = new Set([
   "/api/auth/login",
@@ -62,8 +64,27 @@ export function registerAuthGuard(app: FastifyInstance) {
         sub: string
         role: string
         mfaEnabled: boolean
+        tenantId?: string
       }
-      ;(req as FastifyRequest & { user?: unknown }).user = decoded
+
+      // Phase 5B : tenancy à la requête. Override cross-tenant via header : résolu
+      // seulement si l'utilisateur a une membership dans ce tenant (fail-closed).
+      const headerTenant = tenantFromHeader(req)
+      if (headerTenant) {
+        const allowed = await assertUserInTenant(decoded.sub, headerTenant)
+        if (!allowed) {
+          return reply
+            .code(403)
+            .send({ error: "accès refusé à ce tenant", code: "tenant_forbidden" })
+        }
+      }
+
+      const request = req as FastifyRequest & {
+        user?: unknown
+        tenantId?: string
+      }
+      request.user = { ...decoded, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }
+      request.tenantId = effectiveTenantId(req)
 
       // MFA non activée : seules les routes de setup sont accessibles
       if (!decoded.mfaEnabled && !isMfaSetupPath(path)) {

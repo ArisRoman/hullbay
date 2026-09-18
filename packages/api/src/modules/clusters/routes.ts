@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { clusterService } from "./service";
 import { requireRole } from "../auth/rbac";
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver";
 
 const owner = { preHandler: requireRole("owner") };
 
@@ -16,7 +17,7 @@ export async function registerClustersRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => clusterService.list(),
+    async (req) => clusterService.list((req as TenantScopedRequest).tenantId),
   );
 
   const idParams = z.object({ id: z.string() });

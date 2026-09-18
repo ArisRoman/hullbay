@@ -124,8 +124,11 @@ export class ServersService {
     user: string;
     role: string;
     clusterId: string;
+    tenantId?: string;
   }) {
-    return prisma.server.create({ data: { ...data, status: "provisioning" } });
+    return prisma.server.create({
+      data: { ...data, status: "provisioning" },
+    });
   }
 
   update(id: string, data: Record<string, unknown>) {
