@@ -24,10 +24,11 @@ export class ServersService {
   } as const;
 
   /** Liste exposable au client (secrets exclus). */
-  list() {
+  list(tenantId?: string) {
     return prisma.server.findMany({
       orderBy: { createdAt: "asc" },
       select: ServersService.SAFE_SELECT,
+      ...(tenantId ? { where: { tenantId } } : {}),
     });
   }
 
@@ -124,7 +125,7 @@ export class ServersService {
     user: string;
     role: string;
     clusterId: string;
-    tenantId?: string;
+    tenantId: string;
   }) {
     return prisma.server.create({
       data: { ...data, status: "provisioning" },

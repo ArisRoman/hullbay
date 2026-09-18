@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma"
 import { encryptSecret, decryptSecret } from "../auth/crypto"
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service"
 
 /**
  * Credentials de registre Docker (GHCR par défaut). Token chiffré AES-256-GCM.
@@ -13,9 +14,9 @@ export interface DockerAuthConfig {
 }
 
 export class RegistryService {
-  /** Définit/remplace les credentials d'un registre (upsert par registry). */
-  async set(registry: string, username: string, token: string) {
-    const existing = await prisma.registryCredential.findFirst({ where: { registry } })
+  /** Définit/remplace les credentials d'un registre (upsert par registry + tenant). */
+  async set(registry: string, username: string, token: string, tenantId = DEFAULT_TENANT_ID) {
+    const existing = await prisma.registryCredential.findFirst({ where: { registry, tenantId } })
     if (existing) {
       return prisma.registryCredential.update({
         where: { id: existing.id },
@@ -23,13 +24,13 @@ export class RegistryService {
       })
     }
     return prisma.registryCredential.create({
-      data: { registry, username, tokenEnc: encryptSecret(token) },
+      data: { registry, username, tokenEnc: encryptSecret(token), tenantId },
     })
   }
 
-  /** Liste sans révéler les tokens. */
-  async list() {
-    const creds = await prisma.registryCredential.findMany()
+  /** Liste sans révéler les tokens (tenant-scopée). */
+  async list(tenantId = DEFAULT_TENANT_ID) {
+    const creds = await prisma.registryCredential.findMany({ where: { tenantId } })
     return creds.map((c) => ({ id: c.id, registry: c.registry, username: c.username }))
   }
 
@@ -38,8 +39,8 @@ export class RegistryService {
   }
 
   /** authconfig dockerode pour un registre (déchiffre le token). null si absent. */
-  async getAuthConfig(registry = "ghcr.io"): Promise<DockerAuthConfig | null> {
-    const cred = await prisma.registryCredential.findFirst({ where: { registry } })
+  async getAuthConfig(registry = "ghcr.io", tenantId = DEFAULT_TENANT_ID): Promise<DockerAuthConfig | null> {
+    const cred = await prisma.registryCredential.findFirst({ where: { registry, tenantId } })
     if (!cred) return null
     return {
       username: cred.username,
@@ -51,8 +52,8 @@ export class RegistryService {
   }
 
   /** Tous les registres configurés pour `docker login` au provisioning (tokens déchiffrés). */
-  async listForLogin(): Promise<{ username: string; token: string; registry: string }[]> {
-    const creds = await prisma.registryCredential.findMany()
+  async listForLogin(tenantId = DEFAULT_TENANT_ID): Promise<{ username: string; token: string; registry: string }[]> {
+    const creds = await prisma.registryCredential.findMany({ where: { tenantId } })
     return creds.map((c) => ({
       username: c.username,
       token: decryptSecret(c.tokenEnc),
@@ -61,8 +62,8 @@ export class RegistryService {
   }
 
   /** Credentials d'un registre donné pour le provisioning. */
-  async getLoginCredentials(registry = "ghcr.io"): Promise<{ username: string; token: string; registry: string } | null> {
-    const cred = await prisma.registryCredential.findFirst({ where: { registry } })
+  async getLoginCredentials(registry = "ghcr.io", tenantId = DEFAULT_TENANT_ID): Promise<{ username: string; token: string; registry: string } | null> {
+    const cred = await prisma.registryCredential.findFirst({ where: { registry, tenantId } })
     if (!cred) return null
     return { username: cred.username, token: decryptSecret(cred.tokenEnc), registry }
   }

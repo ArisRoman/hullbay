@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify"
+import type { ProjectGraph } from "@hullbay/shared"
 import { projectsService } from "../projects/service"
 import { ReconcilerService} from "./service"
 import { DockerEngineService } from "../docker-engine/service"
@@ -15,9 +16,22 @@ import { expandDatabaseGraph, databaseNodePreview } from "../database"
 import { DatabaseValidationError } from "../database/validation"
 import type { ExpandedProjectGraph } from "../database"
 import { clusterService } from "../clusters/service"
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
 
 const operator = { preHandler: requireRole("operator") }
 const owner = { preHandler: requireRole("owner") }
+
+/**
+ * Phase 5B — isolation par tenant : un projet d'un autre tenant est traité
+ * comme inexistant (404), jamais comme une ressource visible sans permission.
+ * Type guard : `graph` est non-null APRÈS le test (narrowing TS).
+ */
+function ensureTenantScoped(graph: ProjectGraph | null, req: FastifyRequest): graph is ProjectGraph {
+  if (!graph) return false
+  const tenantId = (req as TenantScopedRequest).tenantId
+  const projectTenant = (graph as { tenantId?: string }).tenantId
+  return !projectTenant || projectTenant === tenantId
+}
 
 /**
  * Routes du moteur : déployer / détruire un projet, et rebuildFromDocker.
@@ -47,7 +61,8 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const graph = await projectsService.getProjectGraph(id);
-      if (!graph) return reply.code(404).send({ error: "project not found" });
+      if (!ensureTenantScoped(graph, req))
+        return reply.code(404).send({ error: "project not found" });
       const engine = await DockerEngineService.forCluster(graph.clusterId)
       const reconciler = await new ReconcilerService(engine)
       // Expansion en lecture seule (moteurs non implémentés ignorés) : le diff
@@ -80,7 +95,8 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id, nodeId } = req.params as { id: string; nodeId: string }
       let graph = await projectsService.getProjectGraph(id)
-      if (!graph) return reply.code(404).send({ error: "project not found" })
+      if (!ensureTenantScoped(graph, req))
+        return reply.code(404).send({ error: "project not found" })
       const draft = (req.query as { draft?: string } | undefined)?.draft
       if (typeof draft === "string" && draft.length > 0) {
         try {
@@ -129,7 +145,8 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: "déploiement déjà en cours" });
       }
       const graph = await projectsService.getProjectGraph(id);
-      if (!graph) return reply.code(404).send({ error: "project not found" });
+      if (!ensureTenantScoped(graph, req))
+        return reply.code(404).send({ error: "project not found" });
 
       // On refuse de lancer un déploiement sur un cluster qu'on sait déjà ne pas
       // être en état de le recevoir. Le statut "ready" seul ne suffit pas, un
@@ -225,7 +242,8 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const graph = await projectsService.getProjectGraph(id);
-      if (!graph) return reply.code(404).send({ error: "project not found" });
+      if (!ensureTenantScoped(graph, req))
+        return reply.code(404).send({ error: "project not found" });
       const engine = await DockerEngineService.forCluster(graph.clusterId)
       const reconciler = new ReconcilerService(engine)
       // Destruction des ressources générées (membres inclus) ; les volumes de
@@ -282,8 +300,9 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => {
-      const clusters = await prisma.cluster.findMany({ select: { id: true, status: true } })
+    async (req) => {
+      const tenantId = (req as TenantScopedRequest).tenantId
+      const clusters = await prisma.cluster.findMany({ where: { tenantId }, select: { id: true, status: true } })
       // Garde (A1) : ne reconstruire que sur des clusters prêts ; un cluster
       // pending/failed ne doit pas servir de base de reconstruction.
       const candidates = clusters.filter((c) => c.status === "ready")

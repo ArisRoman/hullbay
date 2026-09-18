@@ -26,9 +26,9 @@ model Project {
   clusterId   String
   cluster     Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
 
-  // Phase 5B : tenant propriétaire. Nullable en transition (backfill → NOT NULL en fin de 5B).
-  tenantId    String?
-  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 5B : tenant propriétaire.
+  tenantId    String
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
 }
 
@@ -239,8 +239,8 @@ model SecurityPolicy {
   providerAllowlist String  @default("[]")
   updatedAt         DateTime @updatedAt
 
-  // Phase 5B : une policy PAR tenant (fin du singleton) — §4, N°21. Nullable en transition.
-  tenantId          String? @unique
+  // Phase 5B : une policy PAR tenant (fin du singleton) — §4, N°21.
+  tenantId          String @unique
   tenant            Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
@@ -286,9 +286,9 @@ model Server {
   clusterId     String
   cluster       Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
 
-  // Phase 5B : tenant propriétaire (nullable en transition).
-  tenantId      String?
-  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 5B : tenant propriétaire.
+  tenantId      String
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
 }
 
@@ -301,9 +301,9 @@ model RegistryCredential {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Phase 5B : tenant propriétaire (nullable en transition).
-  tenantId  String?
-  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 5B : tenant propriétaire.
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
 }
 
@@ -313,8 +313,8 @@ model Settings {
   domain      String?
   updatedAt   DateTime @updatedAt
 
-  tenantId    String? @unique
-  tenant      Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId    String @unique
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── Cluster Docker swarm (TON TRAVAIL) ──
@@ -331,9 +331,9 @@ model Cluster {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  // Phase 5B : nom unique PAR tenant (ex-@unique global), tenant nullable en transition.
-  tenantId      String?
-  tenant        Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // Phase 5B : nom unique PAR tenant (ex-@unique global).
+  tenantId      String
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@unique([tenantId, name])
   @@index([tenantId])
 }

@@ -64,6 +64,7 @@ describe("POST /api/projects", () => {
     expect(projectsService.createProject).toHaveBeenCalledWith({
       name: "Project1",
       description: "Simple de projet de E-commerce",
+      tenantId: "tenant-default",
     });
   });
 
@@ -100,6 +101,7 @@ describe("POST /api/projects", () => {
     expect(projectsService.createProject).toHaveBeenCalledWith({
       name: "Project1",
       clusterId: "cluster-lab-1",
+      tenantId: "tenant-default",
     });
   });
 

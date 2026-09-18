@@ -8,6 +8,7 @@ import { z } from "zod"
 import { createHash } from "node:crypto"
 import { prisma } from "../../../lib/prisma"
 import { requireRole, currentUser } from "../authorization/rbac"
+import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
 import { authRateLimiter } from "../rate-limit"
 import { registerUsersRoutes } from "./users.routes"
 import { authService } from "../service"
@@ -278,7 +279,8 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       }
       const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200)
       const offset = Math.max(Number(q.offset) || 0, 0)
-      const where = q.action ? { action: q.action } : {}
+      const tenantId = (req as TenantScopedRequest).tenantId
+      const where = { tenantId, ...(q.action ? { action: q.action } : {}) }
       const [rows, total] = await Promise.all([
         prisma.auditLog.findMany({
           where,

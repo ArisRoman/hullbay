@@ -461,8 +461,11 @@ const registryLoginStep: Step<ProvisionInput> = {
   name: "registry-login",
   run: async (input, ctx) => {
     const s = ctx.shared as ProvShared
+    // Credentials du registre SCOPÉS au tenant du serveur (Phase 5B).
+    const cluster = await clusterService.getOrThrow(input.clusterId)
+    const tenantId = cluster.tenantId ?? undefined
     // Login pour TOUS les registres configurés (Docker Hub, GHCR, custom…).
-    const registries = await registryService.listForLogin()
+    const registries = await registryService.listForLogin(tenantId)
     if (registries.length === 0) {
       log(input.serverId, "Pas de credentials registre — étape ignorée.")
       return

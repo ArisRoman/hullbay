@@ -584,7 +584,9 @@ export async function deployProjectWorkflow(input: DeployInput) {
       const host = image.includes("/") ? image.split("/")[0] : "";
       const registry =
         host && (host.includes(".") || host.includes(":")) ? host : "docker.io";
-      const auth = await registryService.getAuthConfig(registry);
+      // Credentials SCOPÉS au tenant du projet (Phase 5B).
+      const tenantId = (input.graph as { tenantId?: string }).tenantId
+      const auth = await registryService.getAuthConfig(registry, tenantId);
       return auth ?? null;
     },
   );

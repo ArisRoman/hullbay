@@ -3,6 +3,7 @@ import { z } from "zod"
 import { NodeType, EdgeKind } from "@hullbay/shared"
 import { projectsService } from "./service"
 import { requireRole } from "../auth/rbac"
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
 
 /**
  * Routes des projets - validation automatique via fastify-type-provider-zod
@@ -28,7 +29,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
       summary: "Liste des projets (viewer+)",
       security: [{ bearerAuth: []}],
     },
-  }, async () => projectsService.listProjects())
+  }, async (req) => projectsService.listProjects((req as TenantScopedRequest).tenantId))
 
   app.get("/api/projects/:id", {
     schema: {
@@ -59,7 +60,8 @@ export async function registerProjectRoutes(app: FastifyInstance) {
     },
   }, async (req) => {
     const body = req.body as { name: string; description?: string; clusterId?: string }
-    return projectsService.createProject(body)
+    const tenantId = (req as TenantScopedRequest).tenantId
+    return projectsService.createProject({ ...body, tenantId })
   })
 
   const updateProjectBody = z.object({

@@ -7,6 +7,7 @@ import {
   type ProjectGraph,
 } from "@hullbay/shared"
 import { clusterService } from "../clusters/service"
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service"
 
 /** Dérive un slug Docker-valide depuis un nom libre (sans accents, minuscules, tirets). */
 function slugify(name: string): string {
@@ -28,8 +29,11 @@ function slugify(name: string): string {
 export class ProjectsService {
   // ── Projects ──────────────────────────────────────────────────────────────
 
-  listProjects() {
-    return prisma.project.findMany({ orderBy: { updatedAt: "desc" } })
+  listProjects(tenantId = DEFAULT_TENANT_ID) {
+    return prisma.project.findMany({
+      where: { tenantId },
+      orderBy: { updatedAt: "desc" },
+    })
   }
 
   async getProjectGraph(id: string): Promise<ProjectGraph | null> {
@@ -46,11 +50,12 @@ export class ProjectsService {
    * garantir l'unicité (le slug préfixe les noms Docker, donc doit être unique).
    * Ex: "Boutique Prod" -> "boutique-prod-a3f8".
    */
-  async createProject(input: { name: string; description?: string; clusterId?: string }) {
+  async createProject(input: { name: string; description?: string; clusterId?: string; tenantId?: string }) {
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID
     const slug = `${slugify(input.name) || "projet"}-${randomBytes(2).toString("hex")}`
-    const targetClusterId = input.clusterId ?? (await clusterService.getDefault()).id
+    const targetClusterId = input.clusterId ?? (await clusterService.getDefault(tenantId)).id
     return prisma.project.create({
-      data: { name: input.name, slug, description: input.description, clusterId: targetClusterId },
+      data: { name: input.name, slug, description: input.description, clusterId: targetClusterId, tenantId },
     })
   }
 

@@ -1,5 +1,9 @@
 import { eventBus } from "../lib/event-bus"
 import { prisma } from "../lib/prisma"
+import {
+  resolveTenantIdForUser,
+  DEFAULT_TENANT_ID,
+} from "../modules/auth/identity/auth-identity.service"
 
 /**
  * Subscriber d'AUDIT centralisé : journalise les events métier dans AuditLog
@@ -57,6 +61,14 @@ export function registerDeploySubscribers(): void {
       // Affiner deploy success/failed.
       const finalAction =
         eventName === "deploy.finished" ? (d.ok ? "deploy.success" : "deploy.failed") : action
+      // Phase 5B : tenant de l'action. Explicite dans le payload si émis, sinon
+      // résolu via les membreships de l'acteur ; événements systèmes → défaut.
+      const tenantId =
+        typeof d.tenantId === "string"
+          ? d.tenantId
+          : d.userId
+            ? await resolveTenantIdForUser(d.userId)
+            : DEFAULT_TENANT_ID
       await prisma.auditLog
         .create({
           data: {
@@ -65,6 +77,7 @@ export function registerDeploySubscribers(): void {
             projectId: d.projectId ?? null,
             serverId: d.serverId ?? null,
             nodeId: d.nodeId ?? null,
+            tenantId,
             payload: { error: d.error ?? null, ...sanitize(d) },
           },
         })

@@ -10,6 +10,7 @@ import { TunnelError } from "../../lib/ssh-tunnel"
 import { clusterService } from "../clusters/service"
 import { migrateClusterAnchorIfNeeded } from "../../workflows/cluster-anchor";
 import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver";
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service";
 
 
 /**
@@ -37,8 +38,8 @@ export async function registerServersRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => {
-      const servers = await serversService.list();
+    async (req) => {
+      const servers = await serversService.list((req as TenantScopedRequest).tenantId);
       const clusterIds = [...new Set(servers.map((s) => s.clusterId))];
       let totalNodes = 0;
       let checkedAny = false;
@@ -118,7 +119,8 @@ export async function registerServersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as z.infer<typeof provisionBody>;
       const { name, host, port, user, credential } = body;
-      const tenantId = (req as TenantScopedRequest).tenantId;
+      const tenantId =
+        (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID;
 
       let clusterId: string;
       let role: "manager" | "worker";

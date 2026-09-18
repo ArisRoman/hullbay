@@ -6,6 +6,17 @@ import {
 } from "@hullbay/shared"
 import { DockerEngineService } from "../docker-engine/service"
 import { prisma } from "../../lib/prisma"
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service"
+
+/** Tenant du cluster (fallback : tenant par défaut — test/données héritées). */
+async function tenantForCluster(clusterId: string): Promise<string> {
+  if (!prisma.cluster?.findUnique) return DEFAULT_TENANT_ID
+  const cluster = await prisma.cluster.findUnique({
+    where: { id: clusterId },
+    select: { tenantId: true },
+  })
+  return cluster?.tenantId ?? DEFAULT_TENANT_ID
+}
 
 /**
  * rebuildFromDocker — PILIER DE RÉSILIENCE.
@@ -101,13 +112,14 @@ export async function rebuildFromDocker(clusterId: string): Promise<{ projects: 
   let nodes = 0
   let edges = 0
   let degraded = 0
+  const tenantId = await tenantForCluster(clusterId)
 
   for (const [projectId, resources] of byProject) {
     const slug = resources[0]?.projectSlug || projectId
     await prisma.project.upsert({
       where: { id: projectId },
-      update: { slug, status: "deployed" },
-      create: { id: projectId, name: slug, slug, status: "deployed", clusterId },
+      update: { slug, status: "deployed", tenantId },
+      create: { id: projectId, name: slug, slug, status: "deployed", clusterId, tenantId },
     })
 
     const projectParents = parentsByProject.get(projectId) ?? new Map()
