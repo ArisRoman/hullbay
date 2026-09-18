@@ -220,7 +220,9 @@ export async function registerServersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const server = await serversService.get(id);
+      const tenantId =
+        (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID;
+      const server = await serversService.get(id, tenantId);
       if (!server)
         return reply.code(404).send({ error: "serveur introuvable" });
       /**
@@ -290,7 +292,9 @@ app.post(
   },
   async (req, reply) => {
     const { id } = req.params as { id: string };
-    const server = await serversService.get(id);
+    const tenantId =
+      (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID;
+    const server = await serversService.get(id, tenantId);
     if (!server) return reply.code(404).send({ error: "serveur introuvable" });
     if (!server.swarmNodeId) {
       return reply.code(409).send({ error: "nœud pas encore joint au Swarm" });

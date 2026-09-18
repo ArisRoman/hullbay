@@ -18,8 +18,10 @@ export class ClusterService {
     });
   }
 
-  get(id: string) {
-    return prisma.cluster.findUnique({ where: { id } });
+  get(id: string, tenantId?: string) {
+    return prisma.cluster.findUnique({
+      where: { id, ...(tenantId ? { tenantId } : {}) },
+    });
   }
 
   getOrThrow(id: string) {
@@ -286,11 +288,12 @@ export class ClusterService {
   async remove(
     id: string,
     opts: { teardown?: boolean } = {},
+    tenantId?: string,
   ): Promise<{
     removedServers: number;
     status: "deleted" | "deleting";
   }> {
-    const cluster = await this.get(id);
+    const cluster = await this.get(id, tenantId);
     if (!cluster) {
       const err = new Error("cluster introuvable");
       (err as Error & { statusCode?: number }).statusCode = 404;

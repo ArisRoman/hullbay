@@ -36,7 +36,10 @@ export async function registerClustersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const cluster = await clusterService.get(id);
+      const cluster = await clusterService.get(
+        id,
+        (req as TenantScopedRequest).tenantId,
+      );
       if (!cluster)
         return reply.code(404).send({ error: "cluster introuvable" });
       return cluster;
@@ -59,7 +62,11 @@ export async function registerClustersRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const { teardown } = req.query as { teardown?: boolean }
       try {
-        const result = await clusterService.remove(id, { teardown });
+        const result = await clusterService.remove(
+          id,
+          { teardown },
+          (req as TenantScopedRequest).tenantId,
+        );
         return { ok: true, ...result };
       } catch (err) {
         const statusCode = (err as Error & { statusCode?: number }).statusCode;

@@ -1,8 +1,10 @@
-import type { FastifyInstance, FastifyRequest } from "fastify"
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import { z } from "zod"
 import { DockerEngineService } from "../docker-engine/service"
 import { requireRole, currentUser } from "../auth/rbac"
+import { clusterService } from "../clusters/service"
 import { eventBus } from "../../lib/event-bus"
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
 
 /**
  * Module secrets — gère les Docker Secrets (valeurs sensibles HORS labels/env).
@@ -29,6 +31,23 @@ const CreateSecretSchema = z.object({
 
 const clusterParams = z.object({ clusterId: z.string() })
 
+/** Phase 5B : le cluster cible doit appartenir au tenant de la requête (404 sinon). */
+async function ensureClusterInTenant(
+  clusterId: string,
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<boolean> {
+  const cluster = await clusterService.get(
+    clusterId,
+    (req as TenantScopedRequest).tenantId,
+  )
+  if (!cluster) {
+    await reply.code(404).send({ error: "cluster introuvable" })
+    return false
+  }
+  return true
+}
+
 export async function registerSecretsRoutes(app: FastifyInstance) {
   // Liste (noms seulement — jamais les valeurs).
   app.get(
@@ -42,8 +61,9 @@ export async function registerSecretsRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async (req) => {
+    async (req, reply) => {
       const { clusterId } = req.params as { clusterId: string }
+      if (!(await ensureClusterInTenant(clusterId, req, reply))) return reply
       const engine = await DockerEngineService.forCluster(clusterId)
       const list = await engine.listManagedSecrets()
       return list.map((s) => ({ id: s.id, name: s.name }))
@@ -65,6 +85,7 @@ export async function registerSecretsRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { clusterId } = req.params as { clusterId: string }
+      if (!(await ensureClusterInTenant(clusterId, req, reply))) return reply
       const { name, value } = req.body as { name: string; value: string };
       const engine = await DockerEngineService.forCluster(clusterId)
       try {
@@ -96,6 +117,7 @@ export async function registerSecretsRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { clusterId, name } = req.params as { clusterId: string; name: string };
+      if (!(await ensureClusterInTenant(clusterId, req, reply))) return reply
       const engine = await DockerEngineService.forCluster(clusterId)
       try {
         await engine.removeSecret(name);

@@ -33,9 +33,9 @@ export class ServersService {
   }
 
   /** Récupération exposable au client (secrets exclus). */
-  get(id: string) {
+  get(id: string, tenantId?: string) {
     return prisma.server.findUnique({
-      where: { id },
+      where: { id, ...(tenantId ? { tenantId } : {}) },
       select: ServersService.SAFE_SELECT,
     });
   }

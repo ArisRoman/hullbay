@@ -3,6 +3,7 @@ import { ObservabilityService, systemHealth } from "./service"
 import { driftTracker } from "./drift"
 import { requireRole } from "../auth/rbac"
 import { prisma } from "../../lib/prisma"
+import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
 
 const viewer = { preHandler: requireRole("viewer") }
 
@@ -45,7 +46,11 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const node = await prisma.node.findFirst({ where: { dockerId: id }, include: { project: true } })
+      const tenantId = (req as TenantScopedRequest).tenantId;
+      const node = await prisma.node.findFirst({
+        where: { dockerId: id, project: { tenantId } },
+        include: { project: true },
+      })
       if (!node) return reply.code(404).send({ error: "service introuvable "})
       try {
         const svc = await ObservabilityService.forCluster(node.project.clusterId)
@@ -80,7 +85,8 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
     }
   }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const project = await prisma.project.findUnique({ where: { id } })
+    const tenantId = (req as TenantScopedRequest).tenantId
+    const project = await prisma.project.findUnique({ where: { id, tenantId } })
     if (!project) return reply.code(404).send({ error: "projet intouvable" })
     const svc = await ObservabilityService.forCluster(project.clusterId)
     const list = await svc.projectPlacements(id)

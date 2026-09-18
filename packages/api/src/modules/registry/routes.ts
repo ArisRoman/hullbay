@@ -76,7 +76,7 @@ export async function registerRegistryRoutes(app: FastifyInstance) {
     },
     async (req) => {
       const { id } = req.params as { id: string };
-      await registryService.remove(id);
+      await registryService.remove(id, (req as TenantScopedRequest).tenantId);
       return { ok: true };
     },
   );

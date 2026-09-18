@@ -60,7 +60,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const graph = await projectsService.getProjectGraph(id);
+      const graph = await projectsService.getProjectGraph(id, (req as TenantScopedRequest).tenantId);
       if (!ensureTenantScoped(graph, req))
         return reply.code(404).send({ error: "project not found" });
       const engine = await DockerEngineService.forCluster(graph.clusterId)
@@ -94,7 +94,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id, nodeId } = req.params as { id: string; nodeId: string }
-      let graph = await projectsService.getProjectGraph(id)
+      let graph = await projectsService.getProjectGraph(id, (req as TenantScopedRequest).tenantId)
       if (!ensureTenantScoped(graph, req))
         return reply.code(404).send({ error: "project not found" })
       const draft = (req.query as { draft?: string } | undefined)?.draft
@@ -144,7 +144,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
       if (deployingProjects.has(id)) {
         return reply.code(409).send({ error: "déploiement déjà en cours" });
       }
-      const graph = await projectsService.getProjectGraph(id);
+      const graph = await projectsService.getProjectGraph(id, (req as TenantScopedRequest).tenantId);
       if (!ensureTenantScoped(graph, req))
         return reply.code(404).send({ error: "project not found" });
 
@@ -196,7 +196,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
           invalidateDockerClient(graph.clusterId);
           log = await deployProjectWorkflow({ graph, createdBy: userId });
         }
-        await projectsService.updateProject(id, { status: "deployed" });
+        await projectsService.updateProject(id, { status: "deployed" }, (req as TenantScopedRequest).tenantId);
         await eventBus.emit("deploy.finished", {
           projectId: id,
           userId,
@@ -206,7 +206,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         return { ok: true, log };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        await projectsService.updateProject(id, { status: "error" });
+        await projectsService.updateProject(id, { status: "error" }, (req as TenantScopedRequest).tenantId);
         await eventBus.emit("deploy.finished", {
           projectId: id,
           userId,
@@ -241,7 +241,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const graph = await projectsService.getProjectGraph(id);
+      const graph = await projectsService.getProjectGraph(id, (req as TenantScopedRequest).tenantId);
       if (!ensureTenantScoped(graph, req))
         return reply.code(404).send({ error: "project not found" });
       const engine = await DockerEngineService.forCluster(graph.clusterId)
@@ -274,7 +274,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         retainedVolumeNames,
         managedDataVolumeNames,
       });
-      await projectsService.updateProject(id, { status: "draft" });
+      await projectsService.updateProject(id, { status: "draft" }, (req as TenantScopedRequest).tenantId);
       // Réinitialise l'état runtime observé.
       await prisma.node.updateMany({
         where: { projectId: id },

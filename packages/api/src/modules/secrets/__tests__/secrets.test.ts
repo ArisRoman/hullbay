@@ -11,6 +11,7 @@ import { buildTestApp } from "../../../__tests__/helpers/build-test-app";
 import { registerSecretsRoutes } from "../routes";
 import { registerAuthGuard } from "../../auth/routes";
 import { authService } from "../../auth/service";
+import { clusterService } from "../../clusters/service";
 import { eventBus } from "../../../lib/event-bus";
 
 // Le moteur Docker est résolu PAR CLUSTER via DockerEngineService.forCluster(),
@@ -40,6 +41,10 @@ vi.mock("../../../lib/event-bus", () => ({
   eventBus: { emit: vi.fn() },
 }));
 
+vi.mock("../../clusters/service", () => ({
+  clusterService: { get: vi.fn() },
+}));
+
 const mockOwnerToken = "mock_owner_token";
 const mockOperatorToken = "mock_operator_token";
 const mockViewerToken = "mock_viewer_token";
@@ -64,6 +69,10 @@ describe("Routes /api/clusters/:clusterId/secrets", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(clusterService.get).mockResolvedValue({
+      id: mockClusterId,
+      tenantId: "tenant-default",
+    } as never);
     vi.mocked(authService.verifyToken).mockImplementation((token: string) => {
       if (token === mockOwnerToken)
         return { sub: "owner-id", role: "owner", mfaEnabled: true };

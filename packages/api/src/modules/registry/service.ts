@@ -34,8 +34,8 @@ export class RegistryService {
     return creds.map((c) => ({ id: c.id, registry: c.registry, username: c.username }))
   }
 
-  async remove(id: string) {
-    await prisma.registryCredential.delete({ where: { id } })
+  async remove(id: string, tenantId = DEFAULT_TENANT_ID) {
+    await prisma.registryCredential.deleteMany({ where: { id, tenantId } })
   }
 
   /** authconfig dockerode pour un registre (déchiffre le token). null si absent. */
