@@ -9,6 +9,10 @@
     "delete": "Supprimer",
     "confirm": "Confirmer"
   },
+  "tenantSwitcher": {
+    "switchTenant": "Changer de tenant",
+    "unknownTenant": "Tenant inconnu"
+  },
   "apiErrors": {
     "unauthorized": "Authentification requise.",
     "forbidden": "Accès refusé : permissions insuffisantes.",

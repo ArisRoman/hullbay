@@ -6,6 +6,7 @@ import { verify } from "crypto";
 import { email } from "zod/v4";
 import { error } from "console";
 import { registerAuthGuard, registerAuthRoutes } from "../routes";
+import { sessionManager } from "../core/session-manager";
 
 
 //Isolons les tests de la base de données
@@ -31,6 +32,13 @@ vi.mock("../../../lib/prisma", () => ({
     prisma: {
         user: {
             findUnique: vi.fn(),
+        },
+        membership: {
+            findFirst: vi.fn(),
+            findUnique: vi.fn(),
+        },
+        authIdentity: {
+            findFirst: vi.fn(),
         },
         auditLog: {
             findMany: vi.fn(),
@@ -471,13 +479,15 @@ describe("Auth Routes", () => {
                 },
             });
 
-            expect(response.statusCode).toBe(200);
+expect(response.statusCode).toBe(200);
              expect(response.json()).toEqual({
                  id: "owner-id",
                  email: "fotetsa@gmail.com",
                  role: "owner",
                  mfaEnabled: true,
                  mfaRequired: false,
+                 activeTenantId: "tenant-default",
+                 tenants: [{ tenantId: "tenant-default", role: "owner", tenant: { slug: "default" } }],
              });
         });
 
@@ -502,6 +512,76 @@ describe("Auth Routes", () => {
 
             expect(response.statusCode).toBe(401);
             expect(response.json()).toEqual({ error: "token invalide" });
+        });
+    });
+
+    /**
+     * POST /api/auth/session/switch-tenant
+    */
+
+    describe("POST /api/auth/session/switch-tenant", () => {
+        it("devrait re-signer la session vers le tenant ciblé avec le rôle de CE tenant", async () => {
+            vi.mocked(prisma.membership.findUnique).mockResolvedValue({ role: "operator" } as any);
+            vi.mocked(prisma.authIdentity.findFirst).mockResolvedValue({ providerId: "local" } as any);
+
+            const response = await app.inject({
+                method: "POST",
+                url: "/api/auth/session/switch-tenant",
+                headers: {
+                    authorization: `Bearer ${mockOwnerToken}`,
+                },
+                payload: { tenantId: "tenant-b" },
+            });
+
+            expect(response.statusCode).toBe(200);
+            const body = response.json();
+            expect(body.activeTenantId).toBe("tenant-b");
+            expect(body.token).toEqual(expect.any(String));
+
+            // Le re-sign porte bien le tenant ciblé ET le rôle du membership de ce tenant.
+            const handle = sessionManager.verifySession(body.token);
+            expect(handle.tenantId).toBe("tenant-b");
+            expect(handle.role).toBe("operator");
+            expect(handle.sub).toBe("owner-id");
+        });
+
+        it("devrait retourner 403 si l'utilisateur n'a pas de membership dans le tenant ciblé", async () => {
+            vi.mocked(prisma.membership.findUnique).mockResolvedValue(null);
+
+            const response = await app.inject({
+                method: "POST",
+                url: "/api/auth/session/switch-tenant",
+                headers: {
+                    authorization: `Bearer ${mockOwnerToken}`,
+                },
+                payload: { tenantId: "tenant-inconnu" },
+            });
+
+            expect(response.statusCode).toBe(403);
+            expect(response.json()).toMatchObject({ code: "tenant_forbidden" });
+        });
+
+        it("devrait retourner 400 si tenantId est manquant", async () => {
+            const response = await app.inject({
+                method: "POST",
+                url: "/api/auth/session/switch-tenant",
+                headers: {
+                    authorization: `Bearer ${mockOwnerToken}`,
+                },
+                payload: {},
+            });
+
+            expect(response.statusCode).toBe(400);
+        });
+
+        it("devrait retourner 401 sans token", async () => {
+            const response = await app.inject({
+                method: "POST",
+                url: "/api/auth/session/switch-tenant",
+                payload: { tenantId: "tenant-b" },
+            });
+
+            expect(response.statusCode).toBe(401);
         });
     });
 

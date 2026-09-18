@@ -1,12 +1,10 @@
-import { createContext, useContext, type ReactNode } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { api } from "./api"
+import { createContext, useContext, useState, type ReactNode } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { api, auth, type Me, type MemberTenant } from "./api"
 
 export type Role = "owner" | "operator" | "viewer"
 
 const RANK: Record<Role, number> = { viewer: 0, operator: 1, owner: 2 }
-
-export type Me = { id: string; email: string; role: Role; mfaEnabled: boolean; mfaRequired?: boolean }
 
 type MeContextValue = {
   me: Me | undefined
@@ -14,11 +12,19 @@ type MeContextValue = {
   isError: boolean
   error?: unknown
   can: (min: Role) => boolean
+  /** Membreships du compte (tenantId + rôle + slug) — alimente le TenantSwitcher. */
+  tenants: MemberTenant[]
+  /** Tenant actif de la session courante (claim JWT re-signé à chaque bascule). */
+  activeTenantId?: string
+  /** Bascule le tenant actif : re-sign de la session puis rechargement des données. */
+  switchTenant: (tenantId: string) => Promise<void>
+  isSwitchingTenant: boolean
 }
 
 const MeContext = createContext<MeContextValue | null>(null)
 
 export function MeProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["me"],
     queryFn: api.me,
@@ -26,7 +32,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
     retry: false,
     // Re-fetch à chaque montage : mfaEnabled peut changer en cours de session
     // (enrôlement via /activate-mfa ou le challenge de login) sans que le
-    // cache ne le voit — un "me" périmé fait boucler l'app sur /activate-mfa.
+    // cache ne le voie — un "me" périmé fait boucler l'app sur /activate-mfa.
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
   })
@@ -37,7 +43,31 @@ export function MeProvider({ children }: { children: ReactNode }) {
     return (RANK[me.role] ?? -1) >= RANK[min]
   }
 
-  return <MeContext.Provider value={{ me, isLoading, isError, error, can }}>{children}</MeContext.Provider>
+  const tenants = me?.tenants ?? []
+  const activeTenantId = me?.activeTenantId
+
+  const [isSwitchingTenant, setSwitchingTenant] = useState(false)
+
+  const switchTenant = async (tenantId: string) => {
+    if (!tenantId || tenantId === activeTenantId) return
+    setSwitchingTenant(true)
+    try {
+      // Re-sign côté API : le nouveau token porte le claim tenantId ciblé.
+      const res = await api.switchTenant(tenantId)
+      auth.set(res.token)
+      // Toutes les requêtes dépendent du tenant de session (guard backend) :
+      // on invalide tout pour que nav/can() et les listes reflètent le tenant actif.
+      await queryClient.invalidateQueries()
+    } finally {
+      setSwitchingTenant(false)
+    }
+  }
+
+  return (
+    <MeContext.Provider value={{ me, isLoading, isError, error, can, tenants, activeTenantId, switchTenant, isSwitchingTenant }}>
+      {children}
+    </MeContext.Provider>
+  )
 }
 
 export function useMe(): MeContextValue {

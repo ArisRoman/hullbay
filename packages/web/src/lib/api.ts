@@ -167,9 +167,12 @@ export const api = {
   listAuthProviders: () =>
     req<AuthProviderPublic[]>("/api/auth/providers"),
   me: () =>
-    req<{ id: string; email: string; role: string; mfaEnabled: boolean }>(
-      "/api/auth/me",
-    ),
+    req<Me>("/api/auth/me"),
+  switchTenant: (tenantId: string) =>
+    req<{ token: string; activeTenantId: string }>("/api/auth/session/switch-tenant", {
+      method: "POST",
+      body: JSON.stringify({ tenantId }),
+    }),
   enrollMfa: () =>
     req<{ otpauth: string; secret: string }>("/api/auth/mfa/enroll", {
       method: "POST",
@@ -494,6 +497,24 @@ export const api = {
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type Environment = "development" | "test" | "production";
+
+/** Tenants accessibles au compte (membreships) — phase 5B, alimente le switcher. */
+export type MemberTenant = {
+  tenantId: string;
+  role: "owner" | "operator" | "viewer";
+  slug: string;
+};
+
+/** Profil exposé par GET /api/auth/me (phase 5B : le rôle suit le tenant actif de session). */
+export type Me = {
+  id: string;
+  email: string;
+  role: "owner" | "operator" | "viewer";
+  mfaEnabled: boolean;
+  mfaRequired?: boolean;
+  activeTenantId?: string;
+  tenants?: MemberTenant[];
+};
 
 export type AuthProviderPublic = {
   id: string;

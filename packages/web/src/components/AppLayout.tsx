@@ -21,6 +21,7 @@ import {
 } from "@medusajs/icons";
 import { api, auth } from "../lib/api"
 import { useMe, type Role } from "../lib/useMe"
+import { TenantSwitcher } from "./TenantSwitcher"
 import { useUpdatesCheck } from "../lib/useUpdates"
 import { ThemeToggle } from "./ThemeToggle/ThemeToggle"
 import { useTranslation } from "react-i18next"
@@ -60,7 +61,7 @@ export function AppLayout({ onLogout }: { onLogout: () => void }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
-  const { me, can } = useMe()
+  const { me, can, tenants } = useMe()
 
   const { data: envData } = useQuery({
     queryKey: ["environment"],
@@ -199,6 +200,7 @@ export function AppLayout({ onLogout }: { onLogout: () => void }) {
             </Badge>
           </div>
         )}
+        {tenants.length > 1 && <TenantSwitcher />}
         <ThemeToggle />
         {/* Sélecteur de langue */}
         <div className="px-2 py-1">

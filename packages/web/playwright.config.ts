@@ -25,7 +25,7 @@ export default defineConfig({
     timeout: 15_000,
   },
   use: {
-    baseURL: "http://localhost:5273",
+    baseURL: "http://127.0.0.1:5273",
     trace: "on-first-retry",
     actionTimeout: 15_000,
   },
@@ -38,7 +38,7 @@ export default defineConfig({
   webServer: {
     // Vite dev (port 5273) : le proxy /api est court-circuité par les routes stub.
     command: "npm run dev",
-    url: "http://localhost:5273",
+    url: "http://127.0.0.1:5273",
     reuseExistingServer: true,
     timeout: 120_000,
   },

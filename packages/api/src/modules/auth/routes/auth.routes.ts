@@ -9,6 +9,8 @@ import { createHash } from "node:crypto"
 import { prisma } from "../../../lib/prisma"
 import { requireRole, currentUser } from "../authorization/rbac"
 import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
+import { sessionManager } from "../core/session-manager"
 import { authRateLimiter } from "../rate-limit"
 import { registerUsersRoutes } from "./users.routes"
 import { authService } from "../service"
@@ -210,12 +212,39 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       const mfaEnabled = identities.length
         ? identities.some((i) => i.mfaEnabled)
         : ((u as { mfaEnabled?: boolean } | null)?.mfaEnabled ?? false)
-      // Rôle effectif via membership (Phase 5B) : repli miroir legacy /me-mock.
+      // Tenant actif de session : le claim signé `tenantId` (pas de header,
+      // pas de routes URL, la session porte le tenant). Repli : tenant de requête
+      // puis tenant par défaut (comptes legacy sans claim).
+      const scoped = req as FastifyRequest & { user?: { tenantId?: string }; tenantId?: string }
+      const activeTenantId = scoped.user?.tenantId ?? scoped.tenantId ?? DEFAULT_TENANT_ID
+      // Rôle effectif via membership DANS le tenant actif  la « role »
+      // exposée doit refléter la permission de SESSION (re-signe à chaque bascule),
+      // pas la première membership arbitraire. Repli miroir legacy /me-mock.
       const member = await prisma.membership?.findFirst?.({
-        where: { userId: user.sub },
+        where: { userId: user.sub, tenantId: activeTenantId },
         select: { role: true },
       })
       const role = member?.role ?? u?.role
+      //  liste des tenants du compte (membreships). Best-effort —
+      // repli sur le tenant actif si les associations membership ne sont pas
+      // interrogeables (mocks/tests) pour ne jamais bloquer le /me.
+      const tenants =
+        (await prisma.membership?.findMany?.({
+          where: { userId: user.sub },
+          select: { tenantId: true, role: true, tenant: { select: { slug: true } } },
+          orderBy: { createdAt: "asc" },
+        })) ??
+        (u
+          ? [
+              {
+                tenantId: activeTenantId,
+                role,
+                tenant: {
+                  slug: activeTenantId === DEFAULT_TENANT_ID ? "default" : activeTenantId,
+                },
+              },
+            ]
+          : [])
       // Compte local : enrôlement obligatoire. Compte externe (LDAP/OIDC/SAML) :
       // pas de 2e MFA locale, sauf si la politique cible le rôle.
       const policyRequires = securityPolicy.getPolicy().mfaRequireRoles.includes((role ?? "").toLowerCase())
@@ -228,7 +257,55 @@ export async function registerAuthRoutes(app: FastifyInstance) {
         role,
         mfaEnabled,
         mfaRequired,
+        // multi-tenancy exposée au frontend (switcher).
+        activeTenantId,
+        tenants,
       }
+    },
+  )
+
+  // ── Bascule du tenant actif de session (Phase 5B §14) — re-sign du JWT ──
+  const switchTenantBody = z.object({ tenantId: z.string().min(1) })
+
+  app.post(
+    "/api/auth/session/switch-tenant",
+    {
+      schema: {
+        body: switchTenantBody,
+        tags: ["auth"],
+        summary: "Bascule du tenant actif de session (réémission du token)",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (req, reply) => {
+      const user = (req as FastifyRequest & { user: { sub: string; mfaEnabled: boolean } }).user
+      const { tenantId } = req.body as { tenantId: string }
+
+      // Membership dans le tenant ciblé : SEULE preuve d'appartenance. Fail-closed
+      // (403) et pas d'oracle : un non-membre ne saura pas si le tenant existe.
+      const member = await prisma.membership?.findUnique?.({
+        where: { userId_tenantId: { userId: user.sub, tenantId } },
+        select: { role: true },
+      })
+      if (!member?.role) {
+        return reply.code(403).send({ error: "accès refusé à ce tenant", code: "tenant_forbidden" })
+      }
+
+      // Provider d'origine du compte conservé au re-sign (best-effort : repli
+      // local quand la table n'est pas interrogeable). L'identité de l'utilisateur
+      // ne change pas avec le tenant → pas de re-vérification MFA.
+      const identity = await prisma.authIdentity?.findFirst?.({
+        where: { userId: user.sub },
+        select: { providerId: true },
+      })
+      const token = sessionManager.signSession(
+        user.sub,
+        member.role,
+        user.mfaEnabled,
+        identity?.providerId ?? "local",
+        tenantId,
+      )
+      return { token, activeTenantId: tenantId }
     },
   )
 
