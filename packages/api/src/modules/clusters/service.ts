@@ -18,6 +18,11 @@ export class ClusterService {
     });
   }
 
+  /** Phase 5B : tous les clusters, TOUS tenants (jobs d'arrière-plan globaux). */
+  listAll() {
+    return prisma.cluster.findMany({ orderBy: { createdAt: "asc" } });
+  }
+
   get(id: string, tenantId?: string) {
     return prisma.cluster.findUnique({
       where: { id, ...(tenantId ? { tenantId } : {}) },

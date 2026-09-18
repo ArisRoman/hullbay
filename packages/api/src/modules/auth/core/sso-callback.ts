@@ -12,7 +12,7 @@
 import { prisma } from "../../../lib/prisma"
 import { resolveIdentity, IdentityPendingError } from "./identity-mapping"
 import { sessionManager } from "./session-manager"
-import { resolveTenantIdForUser } from "../identity/auth-identity.service"
+import { resolveRoleForUser, resolveTenantIdForUser } from "../identity/auth-identity.service"
 import type { ExternalIdentity } from "../providers/types"
 
 export interface SsoPendingResult {
@@ -74,7 +74,8 @@ export async function processSsoCallback(identity: ExternalIdentity): Promise<Ss
 
   // MFA locale : par défaut NON exigée après un SSO validé par l'IdP (§10).
   const tenantId = await resolveTenantIdForUser(user.id)
-  const token = sessionManager.signSession(user.id, user.role, true, "local", tenantId)
+  const role = await resolveRoleForUser(user.id, tenantId, user.role)
+  const token = sessionManager.signSession(user.id, role, true, "local", tenantId)
 
   return {
     pending: false,

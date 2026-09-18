@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { mockClusterService, mockForCluster } = vi.hoisted(() => ({
   mockClusterService: {
-    list: vi.fn(),
+    listAll: vi.fn(),
     markUnhealthy: vi.fn(),
     markRecovered: vi.fn(),
     reclaimStuckDeletions: vi.fn().mockResolvedValue(undefined),
@@ -48,7 +48,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("ne touche pas un cluster qui n'est pas prêt et n'a jamais été provisionné", async () => {
-    mockClusterService.list.mockResolvedValue([
+    mockClusterService.listAll.mockResolvedValue([
       cluster({ status: "pending", dockerHost: "" }),
     ]);
 
@@ -59,7 +59,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("ne tente jamais de vérifier un cluster en échec qui n'a jamais eu d'adresse de connexion", async () => {
-    mockClusterService.list.mockResolvedValue([
+    mockClusterService.listAll.mockResolvedValue([
       cluster({ status: "failed", dockerHost: "" }),
     ]);
 
@@ -72,7 +72,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("ne marque pas un cluster sain, même après un passage", async () => {
-    mockClusterService.list.mockResolvedValue([cluster()]);
+    mockClusterService.listAll.mockResolvedValue([cluster()]);
     mockForCluster.mockResolvedValue({
       isSwarmActive: vi.fn().mockResolvedValue(true),
       managerHealth: vi
@@ -86,7 +86,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("ne marque pas un cluster après un seul échec, en dessous du seuil", async () => {
-    mockClusterService.list.mockResolvedValue([cluster()]);
+    mockClusterService.listAll.mockResolvedValue([cluster()]);
     mockForCluster.mockRejectedValue(new Error("injoignable"));
 
     await runClusterHealthCheck();
@@ -95,7 +95,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("marque le cluster défaillant après trois échecs consécutifs", async () => {
-    mockClusterService.list.mockResolvedValue([cluster()]);
+    mockClusterService.listAll.mockResolvedValue([cluster()]);
     mockForCluster.mockRejectedValue(new Error("injoignable"));
 
     await runClusterHealthCheck();
@@ -107,7 +107,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("remet le compteur d'échecs à zéro dès qu'une vérification réussit à nouveau", async () => {
-    mockClusterService.list.mockResolvedValue([cluster()]);
+    mockClusterService.listAll.mockResolvedValue([cluster()]);
     mockForCluster.mockRejectedValueOnce(new Error("injoignable"));
     mockForCluster.mockRejectedValueOnce(new Error("injoignable"));
     mockForCluster.mockResolvedValueOnce({
@@ -130,7 +130,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("marque un quorum perdu comme défaillant, même si le Swarm répond encore", async () => {
-    mockClusterService.list.mockResolvedValue([cluster()]);
+    mockClusterService.listAll.mockResolvedValue([cluster()]);
     mockForCluster.mockResolvedValue({
       isSwarmActive: vi.fn().mockResolvedValue(true),
       managerHealth: vi
@@ -146,7 +146,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("remet un cluster en service après plusieurs vérifications positives consécutives", async () => {
-    mockClusterService.list.mockResolvedValue([cluster({ status: "failed" })]);
+    mockClusterService.listAll.mockResolvedValue([cluster({ status: "failed" })]);
     mockForCluster.mockResolvedValue({
       isSwarmActive: vi.fn().mockResolvedValue(true),
       managerHealth: vi
@@ -164,7 +164,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("ne remet pas un cluster en service après une seule vérification positive, en dessous du seuil", async () => {
-    mockClusterService.list.mockResolvedValue([cluster({ status: "failed" })]);
+    mockClusterService.listAll.mockResolvedValue([cluster({ status: "failed" })]);
     mockForCluster.mockResolvedValue({
       isSwarmActive: vi.fn().mockResolvedValue(true),
       managerHealth: vi
@@ -179,7 +179,7 @@ describe("runClusterHealthCheck", () => {
   });
 
   it("remet le compteur de récupération à zéro si une vérification échoue de nouveau entre-temps", async () => {
-    mockClusterService.list.mockResolvedValue([cluster({ status: "failed" })]);
+    mockClusterService.listAll.mockResolvedValue([cluster({ status: "failed" })]);
     const healthy = {
       isSwarmActive: vi.fn().mockResolvedValue(true),
       managerHealth: vi
@@ -206,7 +206,7 @@ describe("runClusterHealthCheck", () => {
       const manyClusters = Array.from({ length: 12 }, (_, i) =>
         cluster({ id: `cluster-${i}`, status: "ready" }),
       );
-      mockClusterService.list.mockResolvedValue(manyClusters);
+      mockClusterService.listAll.mockResolvedValue(manyClusters);
 
       let current = 0;
       let peak = 0;

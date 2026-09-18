@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
 import { providerRegistry } from "../registry/provider-registry"
 import { sessionManager } from "../core/session-manager"
-import { resolveTenantIdForUser } from "../identity/auth-identity.service"
+import { resolveRoleForUser, resolveTenantIdForUser } from "../identity/auth-identity.service"
 import { userHasMfaFactor } from "../core/auth-core"
 import { eventBus } from "../../../lib/event-bus"
 import { AUTH_AUDIT_EVENTS } from "../audit-events"
@@ -105,15 +105,19 @@ export async function registerLdapRoutes(app: FastifyInstance) {
               pendingToken: sessionManager.signPending(result.userId),
             }
           }
+          const tenantId = await resolveTenantIdForUser(result.userId)
+          const role = await resolveRoleForUser(result.userId, tenantId, result.role)
           return {
             mfaRequired: false as const,
-            token: sessionManager.signSession(result.userId, result.role, false, id, await resolveTenantIdForUser(result.userId)),
+            token: sessionManager.signSession(result.userId, role, false, id, tenantId),
           }
         }
 
+        const tenantId = await resolveTenantIdForUser(result.userId)
+        const role = await resolveRoleForUser(result.userId, tenantId, result.role)
         return {
           mfaRequired: false as const,
-          token: sessionManager.signSession(result.userId, result.role, true, id, await resolveTenantIdForUser(result.userId)),
+          token: sessionManager.signSession(result.userId, role, true, id, tenantId),
         }
       } catch (err) {
         authRateLimiter.recordFailure(key)

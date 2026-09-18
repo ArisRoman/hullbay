@@ -134,7 +134,7 @@ export async function runClusterHealthCheck(): Promise<void> {
     );
   });
 
-  const clusters = await clusterService.list();
+  const clusters = await clusterService.listAll();
   if (clusters.length === 0) return;
 
   const { totalMs } = await runWithConcurrency(

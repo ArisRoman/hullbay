@@ -210,17 +210,22 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       const mfaEnabled = identities.length
         ? identities.some((i) => i.mfaEnabled)
         : ((u as { mfaEnabled?: boolean } | null)?.mfaEnabled ?? false)
+      // Rôle effectif via membership (Phase 5B) : repli miroir legacy /me-mock.
+      const member = await prisma.membership?.findFirst?.({
+        where: { userId: user.sub },
+        select: { role: true },
+      })
+      const role = member?.role ?? u?.role
       // Compte local : enrôlement obligatoire. Compte externe (LDAP/OIDC/SAML) :
       // pas de 2e MFA locale, sauf si la politique cible le rôle.
-      const policyRequires =
-        securityPolicy.getPolicy().mfaRequireRoles.includes((u?.role ?? "").toLowerCase())
+      const policyRequires = securityPolicy.getPolicy().mfaRequireRoles.includes((role ?? "").toLowerCase())
       const mfaRequired = local
         ? !local.mfaEnabled
         : Boolean(u) && policyRequires && !mfaEnabled
       return {
         id: u?.id,
         email: u?.email,
-        role: u?.role,
+        role,
         mfaEnabled,
         mfaRequired,
       }

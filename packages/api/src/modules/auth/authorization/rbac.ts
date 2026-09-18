@@ -7,6 +7,7 @@
  */
 
 import type { FastifyRequest, FastifyReply } from "fastify"
+import { resolveRoleForUser } from "../identity/auth-identity.service"
 
 export type Role = "owner" | "operator" | "viewer"
 
@@ -25,10 +26,21 @@ export function requireRole(min: Role) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const user = (req as AuthedRequest).user
     if (!user) return reply.code(401).send({ error: "non authentifié" })
+
+    let role = user.role
+    // Privilège cross-tenant (Phase 5B) : si un header resolv un AUTRE tenant que
+    // celui du token, le rôle signé ne vaut pas là-bas → on résout la membership
+    // du tenant cible, sinon un owner tenant-A passerait owner partout (tenancy
+    // fantôme). Même tenant → le claim signé (issu de membership au sign) est fiable.
+    const t = req as unknown as { tenantId?: string; user?: { tenantId?: string } }
+    if (t.tenantId && t.user?.tenantId && t.tenantId !== t.user.tenantId) {
+      role = (await resolveRoleForUser(user.sub, t.tenantId, user.role)) ?? user.role
+    }
+
     // Fail-closed : un rôle hors enum (RANK[role] === undefined) est traité au
     // rang le plus bas. `UNKNOWN_ROLE_RANK` est BEU - pas `undefined < min` qui
     // serait évalué `false` et laisserait passer un rôle inconnu (fail-open).
-    const rank = RANK[user.role] ?? UNKNOWN_ROLE_RANK
+    const rank = RANK[role] ?? UNKNOWN_ROLE_RANK
     if (rank < RANK[min]) {
       return reply.code(403).send({ error: "permission insuffisante" })
     }

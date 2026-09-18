@@ -14,7 +14,12 @@ import { providerRegistry } from "../registry/provider-registry"
 import { sessionManager } from "./session-manager"
 import { resolveIdentity } from "./identity-mapping"
 import { startTotpEnrollment, totpUri, verifyTotpCode } from "../mfa/totp"
-import { ensureDefaultTenant, resolveTenantIdForUser } from "../identity/auth-identity.service"
+import {
+  DEFAULT_TENANT_ID,
+  ensureDefaultTenant,
+  resolveRoleForUser,
+  resolveTenantIdForUser,
+} from "../identity/auth-identity.service"
 import { securityPolicy } from "../policies/security-policy.service"
 
 // ── Trace helper (fire-and-forget) ──
@@ -87,8 +92,9 @@ export async function getUserMfaState(userId: string): Promise<{ mfaEnabled: boo
   if (local) {
     return { mfaEnabled, mfaRequired: !local.mfaEnabled }
   }
-  const user = await getUser(userId)
-  const required = securityPolicy.getPolicy().mfaRequireRoles.includes(user.role.toLowerCase())
+  // Rôle via membership (Phase 5B) : la politique MFA cible les rôles effectifs.
+  const role = await resolveRoleForUser(userId)
+  const required = securityPolicy.getPolicy().mfaRequireRoles.includes(role.toLowerCase())
   return { mfaEnabled, mfaRequired: required && !mfaEnabled }
 }
 
@@ -149,9 +155,10 @@ export async function login(email: string, password: string) {
   }
 
   const tenantId = await resolveTenantIdForUser(result.userId)
+  const role = await resolveRoleForUser(result.userId, tenantId, result.role)
   return {
     mfaRequired: false as const,
-    token: sessionManager.signSession(result.userId, result.role, false, "local", tenantId),
+    token: sessionManager.signSession(result.userId, role, false, "local", tenantId),
   }
 }
 
@@ -176,9 +183,9 @@ export async function verifyMfa(pendingToken: string, code: string) {
 
   trace(AUTH_AUDIT_EVENTS.mfaSuccess, { userId: sub })
 
-  const user = await getUser(sub)
   const tenantId = await resolveTenantIdForUser(sub)
-  return { token: sessionManager.signSession(sub, user.role, true, "local", tenantId) }
+  const role = await resolveRoleForUser(sub, tenantId)
+  return { token: sessionManager.signSession(sub, role, true, "local", tenantId) }
 }
 
 export async function startMfaEnrollment(userId: string) {
@@ -231,9 +238,9 @@ export async function confirmMfaEnrollment(userId: string, code: string) {
 
   trace(AUTH_AUDIT_EVENTS.mfaEnabled, { userId })
 
-  const user = await getUser(userId)
   const tenantId = await resolveTenantIdForUser(userId)
-  return { ok: true, token: sessionManager.signSession(userId, user.role, true, "local", tenantId) }
+  const role = await resolveRoleForUser(userId, tenantId)
+  return { ok: true, token: sessionManager.signSession(userId, role, true, "local", tenantId) }
 }
 
 export async function changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -270,10 +277,20 @@ export async function listUsers() {
   })
   const byUserId = new Map(identities.map((i) => [i.userId, i.mfaEnabled]))
 
+  // Rôle effectif via membership (Phase 5B) : batch sur le tenant par défaut,
+  // repli sur le miroir legacy pour les comptes sans membership.
+  const memberships = prisma.membership?.findMany
+    ? await prisma.membership.findMany({
+        where: { userId: { in: users.map((u) => u.id) }, tenantId: DEFAULT_TENANT_ID },
+        select: { userId: true, role: true },
+      })
+    : []
+  const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]))
+
   return users.map((u) => ({
     id: u.id,
     email: u.email,
-    role: u.role,
+    role: roleByUserId.get(u.id) ?? u.role,
     mfaEnabled: byUserId.get(u.id) ?? false,
     createdAt: u.createdAt,
   }))
@@ -308,10 +325,17 @@ export async function createUser(email: string, password: string, role: "operato
 }
 
 export async function setRole(userId: string, role: Role) {
-  const user = await getUser(userId)
-  if (user.role === "owner" && role !== "owner") {
-    const owners = await prisma.user.count({ where: { role: "owner" } })
-    if (owners <= 1) throw new Error("impossible de rétrograder le dernier owner")
+  // Rôle effectif depuis membership (Phase 5B) ; repli miroir legacy en tests/mocks.
+  const member = await prisma.membership?.findFirst?.({ where: { userId }, select: { role: true } })
+  const currentRole = member?.role ?? (await getUser(userId)).role
+  if (currentRole === "owner" && role !== "owner") {
+    if (!prisma.membership?.count) {
+      const owners = await prisma.user.count({ where: { role: "owner" } })
+      if (owners <= 1) throw new Error("impossible de rétrograder le dernier owner")
+    } else {
+      const owners = await prisma.membership.count({ where: { role: "owner" } })
+      if (owners <= 1) throw new Error("impossible de rétrograder le dernier owner")
+    }
   }
 
   const tenant = await ensureDefaultTenant()
@@ -333,10 +357,17 @@ export async function deleteUser(userId: string, actingUserId: string) {
   if (userId === actingUserId) {
     throw new Error("impossible de supprimer son propre compte")
   }
-  const user = await getUser(userId)
-  if (user.role === "owner") {
-    const owners = await prisma.user.count({ where: { role: "owner" } })
-    if (owners <= 1) throw new Error("impossible de supprimer le dernier owner")
+  // Rôle effectif depuis membership (Phase 5B) ; repli miroir legacy en tests/mocks.
+  const member = await prisma.membership?.findFirst?.({ where: { userId }, select: { role: true } })
+  const currentRole = member?.role ?? (await getUser(userId)).role
+  if (currentRole === "owner") {
+    if (!prisma.membership?.count) {
+      const owners = await prisma.user.count({ where: { role: "owner" } })
+      if (owners <= 1) throw new Error("impossible de supprimer le dernier owner")
+    } else {
+      const owners = await prisma.membership.count({ where: { role: "owner" } })
+      if (owners <= 1) throw new Error("impossible de supprimer le dernier owner")
+    }
   }
   await prisma.user.delete({ where: { id: userId } })
   return { ok: true as const }
