@@ -19,7 +19,7 @@ export class SettingsService {
      * on applique d'abord la config a caddy, et on ne persiste en DB que si caddy a accepte.
      */
     async setDomain(domain: string, tenantId = DEFAULT_TENANT_ID) {
-        await applyDomainToCaddy(domain)
+        await applyDomainToCaddy(domain, tenantId)
 
         const Settings = await prisma.settings.upsert({
             where: { tenantId },

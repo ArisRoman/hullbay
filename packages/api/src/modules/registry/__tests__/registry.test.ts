@@ -91,6 +91,7 @@ describe("POST /api/registry", () => {
     );
     expect(eventBus.emit).toHaveBeenCalledWith("registry.set", {
       userId: "owner-id",
+      tenantId: "tenant-default",
       registry: "ghcr.io",
     });
   });

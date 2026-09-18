@@ -70,7 +70,7 @@ describe("SettingsService", () => {
         domain: "ops.exemple.com",
         url: "https://ops.exemple.com"
       });
-      expect(mockApplyDomainToCaddy).toHaveBeenCalledWith("ops.exemple.com");
+      expect(mockApplyDomainToCaddy).toHaveBeenCalledWith("ops.exemple.com", DEFAULT_TENANT_ID);
       expect(mockPrisma.settings.upsert).toHaveBeenCalledWith({
         where: { tenantId: DEFAULT_TENANT_ID },
         create: { tenantId: DEFAULT_TENANT_ID, domain: "ops.exemple.com" },

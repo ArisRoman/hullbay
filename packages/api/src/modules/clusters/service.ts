@@ -1,4 +1,3 @@
-import { defineConfig } from 'vite';
 import { prisma } from "../../lib/prisma";
 import { eventBus } from "../../lib/event-bus";
 import { Prisma } from "@prisma/client";

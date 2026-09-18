@@ -67,6 +67,7 @@ export async function registerSettingsRoutes(app: FastifyInstance) {
                 await eventBus.emit("settings.domain.set", {
                     userId: currentUser(req)?.sub,
                     domain: body.domain,
+                    tenantId: reqTenant,
                 })
                 return result
             } catch (err) {

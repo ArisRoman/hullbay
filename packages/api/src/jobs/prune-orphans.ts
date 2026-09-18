@@ -44,15 +44,25 @@ async function knownProjectIds(): Promise<Set<string>> {
 
 /** Dépendances injectables pour les tests unitaires (prune reste réel en prod). */
 export interface PruneDeps {
+  tenantId?: string
   knownProjectIds?: () => Promise<Set<string>>
   clusterIds?: () => Promise<string[]>
   engineForCluster?: (clusterId: string) => Promise<DockerEngineService>
 }
 
+/**
+ * Prune des ressources orphelines. Phase 5B : scopé par tenant — un tenant ne
+ * peut pruner QUE les clusters de son tenant (pas ceux d'un autre, pas tous).
+ * `knownProjectIds` reste GLOBAL (un projet vivant ailleurs n'est jamais orphelin).
+ */
 export async function pruneOrphans(apply = false, deps: PruneDeps = {}): Promise<PruneResult> {
+  const tenantId = deps.tenantId
   const known = await (deps.knownProjectIds ?? knownProjectIds)();
   const clusters = await (deps.clusterIds ?? (async () => {
-    const rows = await prisma.cluster.findMany({ select: { id: true } });
+    const rows = await prisma.cluster.findMany({
+      where: tenantId ? { tenantId } : {},
+      select: { id: true },
+    });
     return rows.map((r) => r.id);
   }))();
 
@@ -138,6 +148,7 @@ export async function pruneOrphans(apply = false, deps: PruneDeps = {}): Promise
     await eventBus.emit("prune.finished", {
       removed: removed.length,
       errors: errors.length,
+      tenantId: tenantId ?? undefined,
     });
   }
 

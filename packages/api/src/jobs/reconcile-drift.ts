@@ -16,6 +16,7 @@ import { eventBus } from "../lib/event-bus"
 export async function runDriftCheck(): Promise<void> {
   const projects = await prisma.project.findMany({
     where: { status: "deployed" },
+    select: { id: true, tenantId: true },
   });
   for (const p of projects) {
     const graph = await projectsService.getProjectGraph(p.id);
@@ -28,6 +29,7 @@ export async function runDriftCheck(): Promise<void> {
       if (drift.length > 0) {
         await eventBus.emit("drift.detected", {
           projectId: p.id,
+          tenantId: p.tenantId,
           count: drift.length,
           actions: drift.map((a) => a.kind),
         });

@@ -16,11 +16,21 @@ import { prisma } from '../../lib/prisma';
  * redemarrage de Caddy
  */
 
-//Ids fixes, car il n'existe qu'un seul domaine systeme possible a la fois.
+// Phase 5B : un domaine systeme PAR tenant. Les Ids de route sont suffixés du
+// tenantId pour que deux tenants ne se battent pas sur les mêmes routes Caddy
+// (sinon le dernier `setDomain` supprimait/écrasait les routes de l'autre).
+const API_ROUTE_PREFIX = "hullbay-system-api"
+const WS_ROUTE_PREFIX = "hullbay-system-ws"
+const WEB_ROUTE_PREFIX = "hullbay-system-web"
 
-const API_ROUTE_ID  = "hullbay-system-api"
-const WS_ROUTE_ID   = "hullbay-system-ws"
-const WEB_ROUTE_ID = "hullbay-system-web"
+function routeIds(tenantId: string) {
+  const suffix = tenantId.replace(/[^a-zA-Z0-9_-]/g, "-")
+  return {
+    api: `${API_ROUTE_PREFIX}-${suffix}`,
+    ws: `${WS_ROUTE_PREFIX}-${suffix}`,
+    web: `${WEB_ROUTE_PREFIX}-${suffix}`,
+  }
+}
 
 async function systemAdminUrl(): Promise<string> {
   return getSystemAdminUrl();
@@ -48,21 +58,23 @@ async function ensureListensOn443(adminUrl: string, server: string): Promise<voi
     await caddyAdmin({ adminUrl, path: `/config/apps/http/servers/${server}/listen`, method: "PUT", body: [...listen] })
 }
 
-export async function applyDomainToCaddy(domain: string): Promise<void> {
+export async function applyDomainToCaddy(domain: string, tenantId = "default"): Promise<void> {
     const adminUrl = await systemAdminUrl()
     const server = await resolveServerName(adminUrl)
+    const ids = routeIds(tenantId)
 
     await ensureListensOn443(adminUrl, server)
 
     /**
      * Nettoie les routes existantes (rejouable sans erreur, et gere aussi le cas ou
-     * l'utilisateur change de domaine: les Ids fixes, donc l'ancien domaine est
-     * bien remplacer et non duplique).
+     * l'utilisateur change de domaine: les Ids suffixés du tenant, donc l'ancien
+     * domaine du MEME tenant est bien remplacé et non dupliqué — sans toucher aux
+     * routes des autres tenants).
      */
 
-    await caddyAdmin({adminUrl, path: `/id/${API_ROUTE_ID}`,method:  "DELETE"}).catch(() => { })
-    await caddyAdmin({adminUrl, path: `/id/${WS_ROUTE_ID}`, method:  "DELETE"}).catch(() => { })
-    await caddyAdmin({adminUrl, path: `/id/${WEB_ROUTE_ID}`,method:  "DELETE"}).catch(() => { })
+    await caddyAdmin({adminUrl, path: `/id/${ids.api}`,method:  "DELETE"}).catch(() => { })
+    await caddyAdmin({adminUrl, path: `/id/${ids.ws}`, method:  "DELETE"}).catch(() => { })
+    await caddyAdmin({adminUrl, path: `/id/${ids.web}`,method:  "DELETE"}).catch(() => { })
 
     /**
      * Chaque insertion se fait a l'index 0, ce qui repousse les precedente d'un cran
@@ -76,7 +88,7 @@ export async function applyDomainToCaddy(domain: string): Promise<void> {
       path: `/config/apps/http/servers/${server}/routes/0`,
       method: "PUT",
       body: {
-        "@id": WEB_ROUTE_ID,
+        "@id": ids.web,
         match: [{ host: [domain] }],
         handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "web:80" }] }],
       },
@@ -85,7 +97,7 @@ export async function applyDomainToCaddy(domain: string): Promise<void> {
     
     const wsRes = await caddyAdmin({adminUrl, path: `/config/apps/http/servers/${server}/routes/0`, method: "PUT",
         body: {
-            "@id": WS_ROUTE_ID,
+            "@id": ids.ws,
             match: [{ host: [domain], path: ["/ws*"] }],
             handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "api:4000" }] }]
         },
@@ -93,7 +105,7 @@ export async function applyDomainToCaddy(domain: string): Promise<void> {
     if (!wsRes.ok) throw new Error(`Caddy: route ws échouée (${wsRes.status})`)
     
     const apiRes = await caddyAdmin({ adminUrl, path: `/config/apps/http/servers/${server}/routes/0`, method: "PUT",
-        body: { "@id": API_ROUTE_ID, match: [{ host: [domain], path: ["/api/*"] }], handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "api:4000" }] }] },
+        body: { "@id": ids.api, match: [{ host: [domain], path: ["/api/*"] }], handle: [{ handler: "reverse_proxy", upstreams: [{ dial: "api:4000" }] }] },
     });
     if (!apiRes.ok) throw new Error(`Caddy: route api échouée (${apiRes.status})`);
 }

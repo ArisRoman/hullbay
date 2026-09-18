@@ -125,7 +125,7 @@ export async function registerServersRoutes(app: FastifyInstance) {
       let clusterId: string;
       let role: "manager" | "worker";
       if (body.clusterId) {
-        const target = await clusterService.get(body.clusterId);
+        const target = await clusterService.get(body.clusterId, tenantId);
         if (!target)
           return reply.code(404).send({ error: "cluster introuvable" });
         if (target.tenantId && target.tenantId !== tenantId) {

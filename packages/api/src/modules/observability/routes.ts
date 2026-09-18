@@ -3,7 +3,7 @@ import { ObservabilityService, systemHealth } from "./service"
 import { driftTracker } from "./drift"
 import { requireRole } from "../auth/rbac"
 import { prisma } from "../../lib/prisma"
-import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
+import { effectiveTenantId, type TenantScopedRequest } from "../auth/tenancy/tenant-resolver"
 
 const viewer = { preHandler: requireRole("viewer") }
 
@@ -31,7 +31,7 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => ({ clusters: await systemHealth() }),
+    async (req) => ({ clusters: await systemHealth((req as TenantScopedRequest).tenantId) }),
   );
 
   app.get(
@@ -53,7 +53,7 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
       })
       if (!node) return reply.code(404).send({ error: "service introuvable "})
       try {
-        const svc = await ObservabilityService.forCluster(node.project.clusterId)
+        const svc = await ObservabilityService.forCluster(node.project.clusterId, tenantId)
         return await svc.serviceHealth(id);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -72,7 +72,7 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => ({ drift: driftTracker.snapshot() }),
+    async (req) => ({ drift: driftTracker.snapshot(effectiveTenantId(req)) }),
   );
 
   // Sur quel(s) serveur(s) un projet tourne réellement (placement des tasks Swarm).
@@ -88,7 +88,7 @@ export async function registerObservabilityRoutes(app: FastifyInstance) {
     const tenantId = (req as TenantScopedRequest).tenantId
     const project = await prisma.project.findUnique({ where: { id, tenantId } })
     if (!project) return reply.code(404).send({ error: "projet intouvable" })
-    const svc = await ObservabilityService.forCluster(project.clusterId)
+    const svc = await ObservabilityService.forCluster(project.clusterId, tenantId)
     const list = await svc.projectPlacements(id)
     return { servers: list[0]?.servers ?? [] }
   })

@@ -7,6 +7,7 @@ import type {
 } from "@hullbay/shared"
 import { managedFilter, projectFilter, LabelKeys } from "@hullbay/shared"
 import { getDockerForCluster } from "./client"
+import { clusterService } from "../clusters/service"
 
 /**
  * Erreur "image indisponible" : levée quand l'image ne peut être obtenue selon la
@@ -110,7 +111,19 @@ export class DockerEngineService {
   static async forCluster(
     clusterId: string,
     authResolver?: AuthResolver,
+    tenantId?: string,
   ): Promise<DockerEngineService> {
+    // Phase 5B : si un tenant est fourni, le cluster doit lui appartenir —
+    // sinon l'appelant accède au daemon d'UN AUTRE tenant. Les appels système
+    // (jobs globaux, workflows internes déjà scopés) ne le passent pas.
+    if (tenantId) {
+      const cluster = await clusterService.get(clusterId, tenantId);
+      if (!cluster) {
+        const err = new Error("cluster introuvable") as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
+    }
     const docker = await getDockerForCluster(clusterId);
     return new DockerEngineService(docker, authResolver);
   }

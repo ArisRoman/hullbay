@@ -5,6 +5,7 @@ import { eventBus } from "../../lib/event-bus"
 import { prisma } from "../../lib/prisma"
 import { runWithConcurrency, CLUSTER_CONCURRENCY } from "../../lib/concurrency"
 import { driftTracker } from "./drift"
+import { DEFAULT_TENANT_ID } from "../auth/identity/auth-identity.service"
 
 /**
  * Observability — agrège l'état NATIF de Swarm pour le rendre visible (HealthPage)
@@ -69,9 +70,6 @@ export type ClusterHealth = {
   }
 }
 
-/** Projet -> nombre d'actions de drift en attente (alimenté par le job de drift). */
-const driftByProject = new Map<string, { count: number; actions: string[]; at: number }>()
-
 export class ObservabilityService {
   private engine: DockerEngineService
   private clusterId: string
@@ -80,8 +78,8 @@ export class ObservabilityService {
     this.clusterId = clusterId
   }
 
-  static async forCluster(clusterId: string): Promise<ObservabilityService> {
-    const engine = await DockerEngineService.forCluster(clusterId)
+  static async forCluster(clusterId: string, tenantId?: string): Promise<ObservabilityService> {
+    const engine = await DockerEngineService.forCluster(clusterId, undefined, tenantId)
     return new ObservabilityService(engine, clusterId)
   }
 
@@ -199,12 +197,16 @@ export class ObservabilityService {
   }
 }
 
-export async function systemHealth(): Promise<ClusterHealth[]> {
-  const clusters = await prisma.cluster.findMany({ select: { id: true, name: true } });
+/** Phase 5B : santé scopée par tenant (jamais tous les clusters, tous tenants). */
+export async function systemHealth(tenantId?: string): Promise<ClusterHealth[]> {
+  const clusters = await prisma.cluster.findMany({
+    where: tenantId ? { tenantId } : {},
+    select: { id: true, name: true },
+  });
   const { items, totalMs } = await runWithConcurrency(
     clusters,
     CLUSTER_CONCURRENCY,
-    async (c) => (await ObservabilityService.forCluster(c.id)).clusterHealth(),
+    async (c) => (await ObservabilityService.forCluster(c.id, tenantId)).clusterHealth(),
   );
   const results: ClusterHealth[] = [];
   for (const it of items) {
@@ -226,16 +228,18 @@ export async function systemHealth(): Promise<ClusterHealth[]> {
  */
 export function registerObservabilitySubscribers(): void {
   eventBus.on("drift.detected", (evt) => {
-    const d = evt.data as { projectId: string; count: number; actions: string[] }
-    driftTracker.record(d.projectId, d.count, d.actions ?? [])
+    const d = evt.data as { projectId: string; tenantId?: string; count: number; actions: string[] }
+    const tenantId = d.tenantId ?? DEFAULT_TENANT_ID
+    driftTracker.record(tenantId, d.projectId, d.count, d.actions ?? [])
   })
   eventBus.on("deploy.finished", (evt) => {
-    const d = evt.data as { projectId: string; ok?: boolean }
-    if (d.ok) driftTracker.clear(d.projectId)
+    const d = evt.data as { projectId: string; tenantId?: string; ok?: boolean }
+    const tenantId = d.tenantId ?? DEFAULT_TENANT_ID
+    if (d.ok) driftTracker.clear(tenantId, d.projectId)
   })
   eventBus.on("destroy.finished", (evt) => {
-    const d = evt.data as { projectId: string }
-    driftTracker.clear(d.projectId);
+    const d = evt.data as { projectId: string; tenantId?: string }
+    driftTracker.clear(d.tenantId ?? DEFAULT_TENANT_ID, d.projectId);
   })
 }
 

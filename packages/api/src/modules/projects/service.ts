@@ -53,7 +53,19 @@ export class ProjectsService {
   async createProject(input: { name: string; description?: string; clusterId?: string; tenantId?: string }) {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID
     const slug = `${slugify(input.name) || "projet"}-${randomBytes(2).toString("hex")}`
-    const targetClusterId = input.clusterId ?? (await clusterService.getDefault(tenantId)).id
+    // Phase 5B : si un cluster est fourni, il DOIT appartenir au tenant —
+    // sinon le projet serait créé sur le cluster d'un AUTRE tenant (fuite d'IDs).
+    let targetClusterId = input.clusterId
+    if (targetClusterId) {
+      const cluster = await clusterService.get(targetClusterId, tenantId)
+      if (!cluster) {
+        const err = new Error("cluster introuvable") as Error & { statusCode?: number }
+        err.statusCode = 404
+        throw err
+      }
+    } else {
+      targetClusterId = (await clusterService.getDefault(tenantId)).id
+    }
     return prisma.project.create({
       data: { name: input.name, slug, description: input.description, clusterId: targetClusterId, tenantId },
     })

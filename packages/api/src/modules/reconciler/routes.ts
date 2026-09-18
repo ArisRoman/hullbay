@@ -171,8 +171,9 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
       }
 
       const userId = currentUser(req)?.sub;
+      const reqTenant = (req as TenantScopedRequest).tenantId;
       deployingProjects.add(id);
-      await eventBus.emit("deploy.started", { projectId: id, userId });
+      await eventBus.emit("deploy.started", { projectId: id, userId, tenantId: reqTenant });
       try {
         // Workflow avec steps + compensation (rollback si échec partiel).
         // Retry unique en cas d'erreur tunnel (ECONNREFUSED / EPIPE / socket hang up) :
@@ -200,6 +201,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         await eventBus.emit("deploy.finished", {
           projectId: id,
           userId,
+          tenantId: reqTenant,
           ok: true,
           log,
         });
@@ -210,6 +212,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
         await eventBus.emit("deploy.finished", {
           projectId: id,
           userId,
+          tenantId: reqTenant,
           ok: false,
           error: message,
         });
@@ -283,6 +286,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
       await eventBus.emit("destroy.finished", {
         projectId: id,
         userId: currentUser(req)?.sub,
+        tenantId: (req as TenantScopedRequest).tenantId,
         log,
       });
       return { ok: true, log };

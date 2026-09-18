@@ -15,6 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "backfill:identity": "node src/modules/auth/scripts/backfill-identity.mjs",
+    "backfill:tenant": "node src/modules/auth/scripts/backfill-tenant.mjs",
     "secrets:rotate": "node src/modules/auth/scripts/rotate-secrets.mjs"
   },
   "dependencies": {

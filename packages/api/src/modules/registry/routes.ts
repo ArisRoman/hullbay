@@ -58,6 +58,7 @@ export async function registerRegistryRoutes(app: FastifyInstance) {
       );
       await eventBus.emit("registry.set", {
         userId: currentUser(req)?.sub,
+        tenantId: (req as TenantScopedRequest).tenantId,
         registry: body.registry,
       });
       return { id: cred.id, registry: cred.registry, username: cred.username };
