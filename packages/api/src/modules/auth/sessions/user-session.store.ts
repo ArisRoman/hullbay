@@ -20,6 +20,7 @@ export interface SessionStore {
   signPending(userId: string): string
   verifyPending(token: string): { sub: string }
   revoke(jti: string): Promise<void>
+  revokeUserSessions(userId: string, notJti?: string): Promise<void>
 }
 
 const AUD_SESSION = "session"
@@ -31,7 +32,20 @@ const CACHE_PRUNE_THRESHOLD = 10_000
 /** Fréquence minimale de mise à jour de `lastSeenAt` (anti write-per-request). */
 const TOUCH_INTERVAL_MS = 60_000
 
-const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379")
+// Redis PRÉ-REQUISE (C3) : sans REDIS_URL, pas d'instance — le store retombe sur
+// la mémoire + la DB (source de vérité). Une URL par défaut encourageait des
+// connexions fantômes vers un daemon absent. Erreur de connection loggée (pas
+// crash) : le store doit continuer en mode dégradé mémoire/DB.
+const redis: Redis | null = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 2 })
+  : null
+if (redis) {
+  redis.on("error", (err: Error) => {
+    if (process.env.NODE_ENV !== "test") {
+      console.warn(`[sessions] redis indisponible : ${err.message}`)
+    }
+  })
+}
 const activeSessions = new Map<string, { handle: SessionHandle; expiresAt: number }>()
 const lastTouched = new Map<string, number>()
 // JTI révoqués dans ce process : permet une vérification SYNCHRONE (le fast-path
@@ -45,9 +59,9 @@ function legacySecret(): string {
   return secret
 }
 
-/** TTL de session issu de la policy live (fallback : valeur par défaut). */
-function sessionTtlMs(): number {
-  const ttl = securityPolicy.getPolicy().sessionTtlMs
+/** TTL de session issu de la policy (tenant précis au sign, défaut sinon). */
+function sessionTtlMs(tenantId: string = DEFAULT_TENANT_ID): number {
+  const ttl = securityPolicy.getPolicyCached(tenantId).sessionTtlMs
   return typeof ttl === "number" && ttl > 0 ? ttl : SESSION_TTL_MS
 }
 
@@ -82,21 +96,21 @@ function touchSession(jti: string): void {
 }
 
 function redisReady(): boolean {
-  return redis.status === "ready"
+  return Boolean(redis && redis.status === "ready")
 }
 
 async function cacheSession(jti: string, data: SessionHandle, ttlMs: number): Promise<void> {
   revokedJtis.delete(jti)
   activeSessions.set(jti, { handle: data, expiresAt: Date.now() + ttlMs })
   if (activeSessions.size > CACHE_PRUNE_THRESHOLD) pruneCaches()
-  if (redisReady()) await redis.set(`sess:${jti}`, JSON.stringify(data), "EX", Math.floor(ttlMs / 1000))
+  if (redisReady()) await redis!.set(`sess:${jti}`, JSON.stringify(data), "EX", Math.floor(ttlMs / 1000))
 }
 
 async function markRevoked(jti: string, ttlMs: number): Promise<void> {
   revokedJtis.set(jti, Date.now() + ttlMs)
   activeSessions.delete(jti)
   if (revokedJtis.size > CACHE_PRUNE_THRESHOLD) pruneCaches()
-  if (redisReady()) await redis.set(`revoked:${jti}`, "1", "EX", Math.floor(ttlMs / 1000))
+  if (redisReady()) await redis!.set(`revoked:${jti}`, "1", "EX", Math.floor(ttlMs / 1000))
 }
 
 /**
@@ -109,7 +123,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
     try {
       if (!prisma.userSession) return
       if (redisReady()) {
-        const revoked = await redis.get(`revoked:${jti}`).catch(() => null)
+        const revoked = await redis!.get(`revoked:${jti}`).catch(() => null)
         if (revoked) {
           await markRevoked(jti, SESSION_TTL_MS)
           return
@@ -201,6 +215,40 @@ export class UserSessionStore implements SessionStore {
 
     reconcile(jti, decoded)
     return { sub: decoded.sub, role: decoded.role, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }
+  }
+
+  async revokeUserSessions(userId: string, notJti?: string): Promise<void> {
+    const nowMs = Date.now()
+    // Cache mémoire : invalidation synchrone (fast-path avant tout await).
+    for (const [jti, entry] of [...activeSessions]) {
+      if (entry.handle.sub !== userId) continue
+      if (jti === notJti) continue
+      activeSessions.delete(jti)
+      revokedJtis.set(jti, entry.expiresAt)
+    }
+    // Redis : invalidation par pattern (toutes les sessions actives de l'user).
+    if (redisReady()) {
+      const keys = await redis!.keys(`sess:*`).catch(() => [] as string[])
+      for (const key of keys) {
+        const jti = key.startsWith("sess:") ? key.slice(5) : key
+        if (jti === notJti) continue
+        const raw = await redis!.get(key).catch(() => null)
+        if (!raw) continue
+        try {
+          const handle = JSON.parse(raw) as SessionHandle
+          if (handle.sub === userId) {
+            await redis!.del(key).catch(() => {})
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    // DB : source de vérité — toutes les sessions actives non expirées de l'user.
+    if (prisma.userSession) {
+      await prisma.userSession.updateMany({
+        where: { userId, revokedAt: null, expiresAt: { gt: new Date() }, ...(notJti ? { jti: { not: notJti } } : {}) },
+        data: { revokedAt: new Date() },
+      }).catch(() => {})
+    }
   }
 
   async revoke(jti: string): Promise<void> {

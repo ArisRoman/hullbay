@@ -322,7 +322,9 @@ export class LdapProvider implements AuthProviderContract {
         // 0x0002 = ACCOUNTDISABLE, 0x0010 = LOCKOUT
         if ((uacNum & 0x0002) !== 0 || (uacNum & 0x0010) !== 0) {
           await this.equalizeBindWork()
-          throw new AuthError("invalid_credentials", "compte désactivé ou verrouillé", 401)
+          // C4 : message uniforme ("identifiants invalides") pour ne pas fuiter
+          // l'état du compte AD. La cause exacte passe par `reason` → audit.
+          throw new AuthError("invalid_credentials", "identifiants invalides", 401, "account_disabled_or_locked")
         }
       }
 

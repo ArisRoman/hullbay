@@ -26,4 +26,29 @@ describe("CompositeRateLimiter — config dynamique", () => {
     limiter.recordFailure("k")
     expect(limiter.check("k").blocked).toBe(true)
   })
+
+  it("transmet le tenant effectif au provider de config (seuils par tenant, VÉRIF FINALE)", () => {
+    const seen: (string | undefined)[] = []
+    const limiter = new CompositeRateLimiter((tenantId) => {
+      seen.push(tenantId)
+      return { maxFailures: 2, windowMs: 1000, baseBackoffMs: 10, maxBackoffMs: 20 }
+    })
+    limiter.recordFailure("k|tenant:tenant-a", "tenant-a")
+    limiter.check("k|tenant:tenant-b", "tenant-b")
+    limiter.recordFailure("k|tenant:tenant-c", "tenant-c")
+    // La config (donc les seuils/backoff) est relue pour le tenant de la requête,
+    // pas sur le singleton par défaut (recordFailure → config(tenantId)).
+    expect(seen).toEqual(["tenant-a", "tenant-c"])
+    expect(limiter.check("k|tenant:tenant-b").blocked).toBe(false)
+  })
+
+  it("le tenant par défaut s'applique quand la requête n'en a pas (pré-auth)", () => {
+    const seen: (string | undefined)[] = []
+    const limiter = new CompositeRateLimiter((tenantId) => {
+      seen.push(tenantId)
+      return { maxFailures: 5, windowMs: 60_000, baseBackoffMs: 1000, maxBackoffMs: 5000 }
+    })
+    limiter.recordFailure("k")
+    expect(seen[0]).toBe(undefined)
+  })
 })

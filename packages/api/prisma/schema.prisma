@@ -204,6 +204,7 @@ model PendingIdentity {
   issuer               String?
   subject              String
   email                String?
+  emailVerified        Boolean  @default(false) // OIDC email_verified au mapping
   name                 String?
   requestedForTenantId String?
   status               String   @default("pending") // pending | approved | rejected
@@ -232,6 +233,10 @@ model UserSession {
 model SecurityPolicy {
   id                String   @id @default(cuid())
   sessionTtlMs      Int     @default(43200000)
+  // backoff rate-limit persistant par tenant (rate-limit.ts lit
+  // `getPolicy()` sync — on ne durcit plus ces 2 valeurs inertes en mémoire).
+  rateBaseBackoffMs Int     @default(30000)
+  rateMaxBackoffMs  Int     @default(600000)
   mfaRequireRoles   String  @default("[]")
   loginFailLimit    Int     @default(5)
   loginFailWindowMs Int     @default(60000)
@@ -239,7 +244,7 @@ model SecurityPolicy {
   providerAllowlist String  @default("[]")
   updatedAt         DateTime @updatedAt
 
-  // Phase 5B : une policy PAR tenant (fin du singleton) — §4, N°21.
+  // une policy PAR tenant (fin du singleton) .
   tenantId          String @unique
   tenant            Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
@@ -256,7 +261,7 @@ model AuditLog {
   payload   Json
   createdAt DateTime @default(now())
 
-  // Phase 5B : tenant de l'action (nullable : événements système sans tenant).
+  // tenant de l'action (nullable : événements système sans tenant).
   tenantId  String?
   tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   @@index([tenantId])
@@ -286,7 +291,7 @@ model Server {
   clusterId     String
   cluster       Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
 
-  // Phase 5B : tenant propriétaire.
+  // tenant propriétaire.
   tenantId      String
   tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
@@ -301,7 +306,7 @@ model RegistryCredential {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Phase 5B : tenant propriétaire.
+  // tenant propriétaire.
   tenantId  String
   tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
@@ -331,7 +336,7 @@ model Cluster {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  // Phase 5B : nom unique PAR tenant (ex-@unique global).
+  // nom unique PAR tenant (ex-@unique global).
   tenantId      String
   tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@unique([tenantId, name])
@@ -339,7 +344,7 @@ model Cluster {
 }
 
 
-// ── Mises à jour du système (instances auto-hébergées, style Coolify) ──
+// ── Mises à jour du système (instances auto-hébergées) ──
 // SystemInfo : singleton reflétant l'état courant de l'installation.
 // currentVersion est seedé au boot depuis l'env IMAGE_TAG (source de vérité déployée).
 model SystemInfo {

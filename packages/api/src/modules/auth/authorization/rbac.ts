@@ -34,7 +34,11 @@ export function requireRole(min: Role) {
     // fantôme). Même tenant → le claim signé (issu de membership au sign) est fiable.
     const t = req as unknown as { tenantId?: string; user?: { tenantId?: string } }
     if (t.tenantId && t.user?.tenantId && t.tenantId !== t.user.tenantId) {
-      role = (await resolveRoleForUser(user.sub, t.tenantId, user.role)) ?? user.role
+      //  fail-closed → "viewer", jamais le rôle signé du tenant
+      // d'origine. La résolution (membership du tenant cible) a déjà été
+      // validée par la garde (assertUserInTenant) ; en cas d'échec de la
+      // résolution, un owner tenant-A ne doit PAS hériter ici d'un rôle élevé.
+      role = await resolveRoleForUser(user.sub, t.tenantId, "viewer")
     }
 
     // Fail-closed : un rôle hors enum (RANK[role] === undefined) est traité au

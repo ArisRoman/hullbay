@@ -15,7 +15,7 @@
  * Chaque mutation re-hydrate le ProviderRegistry depuis la DB (loadFromDb).
  */
 
-import type { FastifyInstance } from "fastify"
+import type { FastifyInstance, FastifyRequest } from "fastify"
 import { z } from "zod"
 import { requireRole } from "../authorization/rbac"
 import { prisma } from "../../../lib/prisma"
@@ -24,8 +24,15 @@ import { encryptObject, encryptProviderSecret } from "../secrets/secret-encrypti
 import { SENSITIVE_FIELDS_BY_KIND } from "../registry/seeds"
 import { providerRegistry } from "../registry/provider-registry"
 import type { ProviderKind } from "../providers/types"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
+import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
 
 const owner = { preHandler: requireRole("owner") }
+
+/** Tenant effectif de la requête (claim session → défaut). */
+function reqTenant(req: FastifyRequest): string {
+  return (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID
+}
 
 /** Marqueur renvoyé à la place d'un secret (présence, jamais la valeur). */
 const SECRET_MASK = "••••••••"
@@ -38,6 +45,7 @@ const oidcConfigSchema = z.object({
   scopes: z.string().optional(),
   discoveryUrl: z.string().url().optional(),
   jwksUri: z.string().url().optional(),
+  acceptedClockSkewMs: z.number().int().positive().max(300000).optional(),
 }).strict()
 
 const oauth2ConfigSchema = z.object({
@@ -109,6 +117,7 @@ function dto(row: {
   kind: string
   name: string
   enabled: boolean
+  tenantId?: string | null
   config?: unknown
 }) {
   return {
@@ -116,6 +125,8 @@ function dto(row: {
     kind: row.kind,
     name: row.name,
     enabled: row.enabled,
+    // B5B : tenantId = null ⇒ provider global (disponible pour tous les tenants).
+    tenantId: row.tenantId ?? null,
     config: maskConfig((row.config as Record<string, unknown>) ?? {}, row.kind),
   }
 }
@@ -132,10 +143,14 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => {
+    async (req) => {
+      // B5B : liste filtrée par tenant effectif — providers du tenant courant
+      // + providers globaux (tenantId null). Jamais ceux d'un autre tenant.
+      const tenantId = reqTenant(req)
       const rows = await prisma.authProvider.findMany({
+        where: { OR: [{ tenantId }, { tenantId: null }] },
         orderBy: { kind: "asc" },
-        select: { id: true, kind: true, name: true, enabled: true, config: true },
+        select: { id: true, kind: true, name: true, enabled: true, config: true, tenantId: true },
       })
       return rows.map(dto)
     },
@@ -147,6 +162,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     name: z.string().min(1, "nom requis").max(120),
     enabled: z.boolean().default(false),
     config: z.record(z.string(), z.any()).default({}),
+    tenantId: z.string().min(1).nullable().optional(),
   })
 
   // Création.
@@ -180,6 +196,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
             name: body.name,
             enabled: body.enabled,
             config: config as never,
+            tenantId: body.tenantId ?? null,
             ...(body.id ? { id: body.id } : {}),
           },
         })
@@ -199,6 +216,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     name: z.string().min(1).max(120).optional(),
     enabled: z.boolean().optional(),
     config: z.record(z.string(), z.any()).optional(),
+    tenantId: z.string().min(1).nullable().optional(),
   })
 
   // Mise à jour (partielle). Secrets : le marqueur conserve la valeur existante.
@@ -218,6 +236,17 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const body = updateBody.parse(req.body)
       const row = await prisma.authProvider.findUnique({ where: { id } })
       if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+
+      // Isolation tenant (B5B) : un tenant ne voit ni ne modifie les providers
+      // d'un autre tenant. Les providers globaux (tenantId null) ne sont
+      // mutables que depuis le tenant défaut.
+      const tenantId = reqTenant(req)
+      const notOwned =
+        (row.tenantId !== null && row.tenantId !== tenantId) ||
+        (row.tenantId === null && tenantId !== DEFAULT_TENANT_ID)
+      if (notOwned) {
+        return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      }
 
       // Garde anti-lockout : on ne peut jamais désactiver le dernier provider
       // actif (plus aucun moyen de connecter un compte ⇒ verrouillage total).
@@ -265,6 +294,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         data: {
           ...(body.name !== undefined ? { name: body.name } : {}),
           ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+          ...(body.tenantId !== undefined ? { tenantId: body.tenantId } : {}),
           ...(body.config !== undefined ? { config: encryptedConfig as never } : {}),
         },
       })
@@ -287,8 +317,15 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string }
-      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, enabled: true } })
+      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, enabled: true, tenantId: true } })
       if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      const tenantId = reqTenant(req)
+      const notOwned =
+        (row.tenantId !== null && row.tenantId !== tenantId) ||
+        (row.tenantId === null && tenantId !== DEFAULT_TENANT_ID)
+      if (notOwned) {
+        return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      }
       if (row.id === "local") {
         return reply.code(400).send({ error: "cannot_delete_local_provider", message: "le provider local ne peut pas être supprimé", code: "cannot_delete_local_provider" })
       }
@@ -336,8 +373,15 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const { id } = req.params as { id: string }
-      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, config: true, enabled: true, name: true } })
+      const row = await prisma.authProvider.findUnique({ where: { id }, select: { id: true, kind: true, config: true, enabled: true, name: true, tenantId: true } })
       if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      const tenantId = reqTenant(req)
+      const notOwned =
+        (row.tenantId !== null && row.tenantId !== tenantId) ||
+        (row.tenantId === null && tenantId !== DEFAULT_TENANT_ID)
+      if (notOwned) {
+        return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      }
 
       const schema = kindToSchema(row.kind)
       if (!schema) {

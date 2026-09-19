@@ -9,7 +9,7 @@ import { prisma } from "../../../lib/prisma"
 import { authService } from "../service"
 import { sessionManager } from "../core/session-manager"
 import { resolveRoleForUser, resolveTenantIdForUser } from "../identity/auth-identity.service"
-import { authRateLimiter } from "../rate-limit"
+import { authRateLimiter, rateLimitTenant } from "../rate-limit"
 import { AuthError } from "../providers/types"
 import {
   generateWebauthnRegistrationOptions,
@@ -193,8 +193,8 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
       const throttleKey = body.pendingToken
         ? createHash("sha256").update(body.pendingToken).digest("hex").slice(0, 32)
         : req.ip
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/webauthn/auth/verify", throttleKey)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/webauthn/auth/verify", throttleKey, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
 
       try {
@@ -207,7 +207,7 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
           challengeKeyFromRequest(req, body.pendingToken),
         )
 
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
 
         const user = await prisma.user.findUnique({
           where: { id: userId },
@@ -222,7 +222,7 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
           token: sessionManager.signSession(user.id, role, true, "local", tenantId),
         }
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 401)
         return reply.code(status).send(payload)
       }

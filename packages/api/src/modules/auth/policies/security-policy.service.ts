@@ -39,8 +39,8 @@ function toPolicy(p: PrismaSecurityPolicy): SecurityPolicy {
     loginFailLimit: p.loginFailLimit,
     loginFailWindowMs: p.loginFailWindowMs,
     lockoutMs: p.lockoutMs,
-    rateBaseBackoffMs: DEFAULTS.rateBaseBackoffMs,
-    rateMaxBackoffMs: DEFAULTS.rateMaxBackoffMs,
+    rateBaseBackoffMs: p.rateBaseBackoffMs,
+    rateMaxBackoffMs: p.rateMaxBackoffMs,
     sessionTtlMs: p.sessionTtlMs,
     providerAllowlist: parseJsonArray(p.providerAllowlist, DEFAULTS.providerAllowlist),
   }
@@ -78,6 +78,20 @@ export class SecurityPolicyService {
     return this.ensurePolicy(DEFAULT_TENANT_ID)
   }
 
+  /**
+   * Lecture SYNCHRONE de la politique d'un tenant (cache mémoire). Destinée aux
+   * chemins qui ne peuvent pas `await` (TTL de session au sign, config rate-limit,
+   * gardes de route). Miss → policy du tenant par défaut + warm ASYNC (jamais de
+   * blocage sur la requête) ; le prochain appel obtiendra la vraie policy tenant.
+   */
+  getPolicyCached(tenantId: string = DEFAULT_TENANT_ID): SecurityPolicy {
+    const cached = this.policiesByTenant.get(tenantId)
+    if (cached) return cached
+    if (tenantId === DEFAULT_TENANT_ID) return this.ensurePolicy(DEFAULT_TENANT_ID)
+    void this.getPolicyForTenant(tenantId).catch(() => {})
+    return this.policiesByTenant.get(DEFAULT_TENANT_ID) ?? DEFAULTS
+  }
+
   /** Policy d'un tenant précis (routes owner). Charge depuis la DB, cache mémoire. */
   async getPolicyForTenant(tenantId: string): Promise<SecurityPolicy> {
     if (tenantId === DEFAULT_TENANT_ID) return this.getPolicy()
@@ -102,6 +116,8 @@ export class SecurityPolicyService {
       loginFailWindowMs: policy.loginFailWindowMs ?? merged.loginFailWindowMs,
       lockoutMs: policy.lockoutMs ?? merged.lockoutMs,
       sessionTtlMs: policy.sessionTtlMs ?? merged.sessionTtlMs,
+      rateBaseBackoffMs: policy.rateBaseBackoffMs ?? merged.rateBaseBackoffMs,
+      rateMaxBackoffMs: policy.rateMaxBackoffMs ?? merged.rateMaxBackoffMs,
       providerAllowlist: JSON.stringify(policy.providerAllowlist ?? merged.providerAllowlist),
     }
     if (prisma.securityPolicy) prisma.securityPolicy.upsert({

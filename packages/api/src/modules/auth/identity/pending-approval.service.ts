@@ -25,7 +25,15 @@ export type ApproveTarget = {
   role: "owner" | "operator" | "viewer"
 }
 
-export class PendingApprovalError extends Error {}
+export class PendingApprovalError extends Error {
+  /** Code machine : `email_not_verified` → route 409 (conflit), sinon 400. */
+  readonly code?: string
+  constructor(message: string, code?: string) {
+    super(message)
+    this.name = "PendingApprovalError"
+    this.code = code
+  }
+}
 
 /** Liste les demandes en attente (owner). */
 export async function listPendingIdentities(): Promise<PendingIdentity[]> {
@@ -69,9 +77,18 @@ export async function approvePendingIdentity<const T extends ApproveTarget>(
 
   const result = await prisma.$transaction(async (tx) => {
     // Réutilise le User existant sur cet email (email @unique), sinon le crée.
+    // GARDE B5 : l'email n'est réutilisé que si l'IdP l'a VÉRIFIÉ
+    // (OIDC email_verified). Un provider sans preuve (LDAP/OAuth2) ne peut pas
+    // revendiquer un email appartenant à un compte local existant → 409.
     const existingUser = pending.email
       ? await tx.user.findUnique({ where: { email: pending.email } })
       : null
+    if (existingUser && !pending.emailVerified) {
+      throw new PendingApprovalError(
+        "un compte existe déjà pour cet email et le provider ne le vérifie pas — refus de lier l'identité",
+        "email_not_verified",
+      )
+    }
     const user =
       existingUser ??
       (await tx.user.create({

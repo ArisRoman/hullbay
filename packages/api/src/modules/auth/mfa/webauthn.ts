@@ -136,6 +136,10 @@ function parseTransports(raw?: string | null): any | undefined {
 }
 
 // ── Store temporaire de challenges en mémoire bornée ──
+//
+// C2 — CONTRAINTE DE DÉPLOIEMENT : process-local. En multi-instance, un
+// challenge émis sur A n'est pas vérifiable sur B (assertion WebAuthn rejetée).
+// Single-instance ou affinité sticky requis pour les cérémonies WebAuthn.
 
 interface StoredChallenge {
   challenge: string
@@ -384,6 +388,15 @@ export async function verifyWebauthnAuthentication(
   if (!verification.verified) {
     void eventBus.emit(AUTH_AUDIT_EVENTS.mfaFailed, { userId, factor: "webauthn" }).catch(() => {})
     throw new AuthError("mfa_code_invalid", "vérification de la clé de sécurité échouée", 400)
+  }
+
+  // Garde C6 : un compteur non strictement croissant signale une copie du
+  // credential ou une réinitialisation (rejeu). On refuse — sans jamais
+  // persister le nouveau compteur — pour empêcher que la copie devienne la
+  // référence officielle.
+  if (Number(verification.authenticationInfo.newCounter) <= Number(credentialRow.counter)) {
+    void eventBus.emit(AUTH_AUDIT_EVENTS.mfaFailed, { userId, factor: "webauthn", reason: "counter_replay" }).catch(() => {})
+    throw new AuthError("mfa_code_invalid", "clé de sécurité compromise ou rejouée", 401)
   }
 
   // Met à jour le compteur et la date de dernière utilisation

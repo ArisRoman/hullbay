@@ -39,6 +39,10 @@ const MFA_SETUP_PATHS = new Set([
   "/api/auth/mfa/webauthn/register/verify",
   "/api/auth/mfa/webauthn/credentials",
   "/api/auth/me",
+  // C7 : changer de tenant n'a pas besoin de re-MFA (l'utilisateur détient déjà
+  // une session MFA dans le tenant courant) ; il faut juste le laisser atteindre
+  // cette route quand sa session est "setup" (mfaEnabled=false).
+  "/api/auth/session/switch-tenant",
 ])
 
 function isMfaSetupPath(path: string): boolean {

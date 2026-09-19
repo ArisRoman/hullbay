@@ -42,20 +42,20 @@ export class AuthService {
     return authCore.countUsers()
   }
 
-  async listUsers() {
-    return authCore.listUsers()
+  async listUsers(tenantId?: string) {
+    return authCore.listUsers(tenantId)
   }
 
-  async createUser(email: string, password: string, role: "operator" | "viewer") {
-    return authCore.createUser(email, password, role)
+  async createUser(email: string, password: string, role: "operator" | "viewer", tenantId?: string) {
+    return authCore.createUser(email, password, role, tenantId)
   }
 
-  async setRole(userId: string, role: Role) {
-    return authCore.setRole(userId, role)
+  async setRole(userId: string, role: Role, tenantId?: string) {
+    return authCore.setRole(userId, role, tenantId)
   }
 
-  async deleteUser(userId: string, actingUserId: string) {
-    return authCore.deleteUser(userId, actingUserId)
+  async deleteUser(userId: string, actingUserId: string, tenantId?: string) {
+    return authCore.deleteUser(userId, actingUserId, tenantId)
   }
 
   issueToken(userId: string, role: string, mfaEnabled: boolean): string {

@@ -35,9 +35,14 @@ export async function resolveTenantIdForUser(userId: string): Promise<string> {
   return membership?.tenantId ?? DEFAULT_TENANT_ID
 }
 
-/** Vérifie que l'utilisateur a une membership dans le tenant demandé. */
+/**
+ * Vérifie que l'utilisateur a une membership dans le tenant demandé.
+ * plus de court-circuit sur DEFAULT_TENANT_ID — le header
+ * `x-tenant-id: tenant-default` exige une membership par défaut comme n'importe
+ * quel autre tenant (sinon un owner tenant-B escaladait via le tenant par défaut).
+ * Backfill A3 garantit que les comptes hérités ont bien leur membership default.
+ */
 export async function assertUserInTenant(userId: string, tenantId: string): Promise<boolean> {
-  if (tenantId === DEFAULT_TENANT_ID) return true
   if (!prisma.membership?.findUnique) return true
   const membership = await prisma.membership.findUnique({
     where: { userId_tenantId: { userId, tenantId } },
@@ -52,6 +57,9 @@ export type ResolvedRole = "owner" | "operator" | "viewer"
  * Rôle effectif de l'utilisateur (Phase 5B §13) : résolu depuis SA membership
  * dans le tenant courant — le miroir `User.role` n'est plus la source de
  * vérité (fallback legacy pour les comptes sans membership / mocks).
+ * le fallback cross-tenant (findFirst sur n'IMPORTE quelle
+ * membership) est supprimé — une résolution hors du tenant courant ne doit
+ * JAMAIS remonter un rôle d'un autre tenant (escalade tenant défaut).
  */
 export async function resolveRoleForUser(
   userId: string,
@@ -68,10 +76,6 @@ export async function resolveRoleForUser(
         })
         .catch(() => null)
       if (membership?.role) return membership.role as ResolvedRole
-    }
-    if (prisma.membership?.findFirst) {
-      const anyTenant = await prisma.membership.findFirst({ where: { userId }, select: { role: true } }).catch(() => null)
-      if (anyTenant?.role) return anyTenant.role as ResolvedRole
     }
     if (prisma.user?.findFirst) {
       const user = await prisma.user.findFirst({ where: { id: userId } }).catch(() => null)

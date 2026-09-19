@@ -14,6 +14,8 @@ import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import { requireRole, currentUser } from "../authorization/rbac"
 import { prisma } from "../../../lib/prisma"
+import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 import {
   listPendingIdentities,
   getPendingIdentity,
@@ -77,6 +79,16 @@ export async function registerPendingRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string }
       const body = approveBody.parse(req.body)
+      // l'approbation est bornée au tenant effectif de l'acteur
+      // (posé par la garde). Un owner tenant-A ne peut PLUS octroyer owner/vues
+      // sur un AUTRE tenant (escalade cross-tenant). Requête cross-tenant → 403
+      // AVANT toute lecture pending (pas d'oracle d'existence).
+      const actorTenant = (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID
+      if (body.tenantId !== actorTenant) {
+        return reply
+          .code(403)
+          .send({ error: "approbation limitée au tenant courant", code: "tenant_forbidden" })
+      }
       const pending = await getPendingIdentity(id)
       if (!pending) return reply.code(404).send({ error: "demande introuvable ou déjà traitée" })
       try {
@@ -91,6 +103,11 @@ export async function registerPendingRoutes(app: FastifyInstance) {
         }
       } catch (err) {
         if (err instanceof PendingApprovalError) {
+          // Conflit : compte existant sur un email que le provider ne vérifie
+          // pas → 409 (pas un 400 générique) pour signaler le refus de lien.
+          if (err.code === "email_not_verified") {
+            return reply.code(409).send({ error: err.message, code: err.code })
+          }
           return reply.code(400).send({ error: err.message })
         }
         throw err

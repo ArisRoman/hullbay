@@ -10,8 +10,9 @@ import { resolveRoleForUser, resolveTenantIdForUser } from "../identity/auth-ide
 import { userHasMfaFactor } from "../core/auth-core"
 import { eventBus } from "../../../lib/event-bus"
 import { AUTH_AUDIT_EVENTS } from "../audit-events"
-import { authRateLimiter } from "../rate-limit"
+import { authRateLimiter, rateLimitTenant } from "../rate-limit"
 import { IdentityPendingError } from "../core/identity-mapping"
+import { AuthError } from "../providers/types"
 
 function serializeError(err: unknown, fallbackStatus = 400) {
   const message = err instanceof Error ? err.message : String(err)
@@ -67,8 +68,8 @@ export async function registerLdapRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string }
       const body = req.body as { username: string; password: string }
 
-      const key = authRateLimiter.keyFor(req.ip, `/api/auth/ldap/${id}/login`, body.username)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, `/api/auth/ldap/${id}/login`, body.username, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
 
       try {
@@ -85,7 +86,7 @@ export async function registerLdapRoutes(app: FastifyInstance) {
           ldapPassword: body.password,
         })
 
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
 
         // Audit de succès au niveau credentials (miroir des logins local/SSO) :
         // la décision MFA qui suit est un état intermédiaire, pas un échec.
@@ -120,7 +121,7 @@ export async function registerLdapRoutes(app: FastifyInstance) {
           token: sessionManager.signSession(result.userId, role, true, id, tenantId),
         }
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
 
         if (err instanceof IdentityPendingError) {
           return reply.code(403).send({
@@ -130,7 +131,11 @@ export async function registerLdapRoutes(app: FastifyInstance) {
         }
 
         const { status, payload } = serializeError(err, 401)
-        traceLdapFailed(id, body.username, payload.code)
+        // C4 : la cause machine (AuthError.reason, ex. account_disabled_or_locked)
+        // alimente l'audit ldapFailed ; elle n'apparaît jamais dans le payload
+        // renvoyé au client (message uniforme "identifiants invalides").
+        const reason = err instanceof AuthError ? err.reason : undefined
+        traceLdapFailed(id, body.username, reason ?? payload.code)
         return reply.code(status).send(payload)
       }
     },

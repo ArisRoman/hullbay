@@ -25,3 +25,14 @@ export async function revokeSession(jti: string) {
   await userSessionStore.revoke(jti)
   return { revoked: true }
 }
+
+/**
+ * Révoque TOUTES les sessions d'un utilisateur, sauf `notJti` éventuel
+ * (jti de la session courante — permet « déconnecter tous les autres
+ * appareils » sans se logout soi-même). Utilisée aussi par setRole (baisse)
+ * et deleteUser pour réduire la fenêtre où un claim périmé reste accepté.
+ */
+export async function revokeUserSessions(userId: string, notJti?: string) {
+  await userSessionStore.revokeUserSessions(userId, notJti)
+  return { revoked: true }
+}

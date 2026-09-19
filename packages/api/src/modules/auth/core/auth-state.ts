@@ -2,6 +2,13 @@
  * Auth State Stores (nonce / state / PKCE) — stubs Phase 2.
  * Utilisés en Phase 3 (OIDC/OAuth2) et Phase 4 (SAML RelayState).
  * En Phase 2 seule la logique locale fonctionne, ces stores restent inutilisés.
+ *
+ * C2 — CONTRAINTE DE DÉPLOIEMENT : ces stores sont process-local (Map mémoire).
+ * En multi-instance, un flux SSO initié sur l'instance A et callbacké vers
+ * l'instance B ne retrouverait pas son state/nonce/PKCE. La session (UserSession)
+ * reste elle couverte par Redis (user-session.store). Exigence : pour exploiter
+ * les providers SSO (OIDC/OAuth2/SAML), soit single-instance, soit sessions
+ * persistantes / affinité sticky vers l'instance qui a initié le flux.
  */
 
 export class AuthStateStore<T = unknown> {

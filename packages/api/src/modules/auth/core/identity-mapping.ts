@@ -13,6 +13,8 @@
  * NB : `issuer` est NULL pour local/ldap. L'input `findUnique` composé de Prisma
  * exige `issuer: string` — on passe donc par findFirst (filtres acceptant NULL).
  * NB PG : UNIQUE(NULL) ne dédoublonne pas ; un PendingIdentity à issuer NULL est
+ * (C5) couvert par un index partiel (issuer IS NULL) sur providerId+subject —
+ * l'unicité des identités local/ldap est garantie en base, pas seulement ici.
  * correctement évité ici par findFirst+create. (Chemin real pour oidc/saml : 3+/4.)
  */
 
@@ -61,15 +63,25 @@ export async function resolveIdentity(
     },
   })
   if (!pending) {
-    await prisma.pendingIdentity.create({
-      data: {
-        providerId: identity.providerId,
-        issuer: identity.issuer,
-        subject: identity.subject,
-        email: identity.email,
-        name: identity.name,
-      },
-    })
+    try {
+      await prisma.pendingIdentity.create({
+        data: {
+          providerId: identity.providerId,
+          issuer: identity.issuer,
+          subject: identity.subject,
+          email: identity.email,
+          emailVerified: identity.emailVerified === true,
+          name: identity.name,
+        },
+      })
+    } catch (err) {
+      // C5 : deux requêtes concurrentes pour la même identité inconnue — seule
+      // la première crée. L'index partiel PG (issuer IS NULL) corrige le défaut
+      // de dédoublonnage de UNIQUE(NULL) ; P2002 = l'autre a gagné, on continue
+      // vers la réponse "en attente d'approbation" (pas de doublon).
+      const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined
+      if (code !== "P2002") throw err
+    }
     // Notifie le workflow d'approbation (5A1 — subscriber on-deploy-finished).
     // Fire-and-forget : la création de pending ne doit pas dépendre de l'audit.
     await eventBus.emit(AUTH_AUDIT_EVENTS.pendingCreated, {

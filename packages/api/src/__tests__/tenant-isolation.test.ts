@@ -214,7 +214,7 @@ describe("Phase 5B — isolation multi-tenant", () => {
       db.audit.filter((a) => matchesWhere(a, where)).length)
     mockPrisma.membership.findUnique.mockImplementation(async ({ where }) =>
       db.clusters.some((c) => c.tenantId === where.userId_tenantId?.tenantId)
-        ? { tenantId: where.userId_tenantId?.tenantId }
+        ? { tenantId: where.userId_tenantId?.tenantId, role: "owner" }
         : null)
     mockPrisma.membership.findFirst.mockImplementation(async () => ({ tenantId: TENANT_A }))
   })
@@ -254,6 +254,18 @@ describe("Phase 5B — isolation multi-tenant", () => {
       token(TENANT_A, "owner")
       mockPrisma.membership.findUnique.mockResolvedValue(null)
       const res = await get("/api/clusters", { "x-tenant-id": "tenant-inconnu" })
+      expect(res.statusCode).toBe(403)
+      expect(res.json()).toMatchObject({ code: "tenant_forbidden" })
+      expect(mockPrisma.cluster.findMany).not.toHaveBeenCalled()
+    })
+
+    it("A4: owner tenant-B + header tenant-default SANS membership default → 403 (escalade A2)", async () => {
+      // La garde exige une membership RÉELLE dans le tenant par défaut (plus de
+      // court-circuit DEFAULT_TENANT_ID) : un owner d'un autre tenant ne peut pas
+      // enrober le tenant par défaut via le header. (users/pendings/providers
+      // sont derrière la même garde → 403 systématique.)
+      token(TENANT_B, "owner")
+      const res = await get("/api/clusters", { "x-tenant-id": "tenant-default" })
       expect(res.statusCode).toBe(403)
       expect(res.json()).toMatchObject({ code: "tenant_forbidden" })
       expect(mockPrisma.cluster.findMany).not.toHaveBeenCalled()

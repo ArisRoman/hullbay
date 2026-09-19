@@ -8,8 +8,16 @@ import { z } from "zod"
 import { requireRole, currentUser } from "../authorization/rbac"
 import { eventBus } from "../../../lib/event-bus"
 import { authService } from "../service"
+import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 
 const owner = { preHandler: requireRole("owner") }
+
+function reqTenant(req: FastifyRequest): string {
+  // Tenant effectif posé par la garde (header validé par membership) ;
+  // repli par défaut pour les harnais de test sans garde.
+  return (req as TenantScopedRequest).tenantId ?? DEFAULT_TENANT_ID
+}
 
 export async function registerUsersRoutes(app: FastifyInstance) {
   app.get(
@@ -22,7 +30,7 @@ export async function registerUsersRoutes(app: FastifyInstance) {
         security: [{ bearerAuth: [] }],
       },
     },
-    async () => authService.listUsers(),
+    async (req) => authService.listUsers(reqTenant(req)),
   )
 
   const createUserBody = z.object({
@@ -45,12 +53,14 @@ export async function registerUsersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       try {
         const body = createUserBody.parse(req.body)
-        const u = await authService.createUser(body.email, body.password, body.role)
+        const u = await authService.createUser(body.email, body.password, body.role, reqTenant(req))
         await eventBus.emit("user.created", {
           userId: currentUser(req)?.sub,
           targetUserId: u.id,
           email: u.email,
           role: u.role,
+          // C9 : les auditeurs tenant-aware doivent pouvoir corréler l'événement.
+          tenantId: reqTenant(req),
         })
         return u
       } catch (err) {
@@ -80,11 +90,12 @@ export async function registerUsersRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string }
       try {
         const body = setRoleBody.parse(req.body)
-        const u = await authService.setRole(id, body.role)
+        const u = await authService.setRole(id, body.role, reqTenant(req))
         await eventBus.emit("user.role.changed", {
           userId: currentUser(req)?.sub,
           targetUserId: id,
           role: u.role,
+          tenantId: reqTenant(req),
         })
         return u
       } catch (err) {
@@ -110,10 +121,11 @@ export async function registerUsersRoutes(app: FastifyInstance) {
       const acting = currentUser(req)?.sub
       if (!acting) return reply.code(401).send({ error: "non authentifié" })
       try {
-        const r = await authService.deleteUser(id, acting)
+        const r = await authService.deleteUser(id, acting, reqTenant(req))
         await eventBus.emit("user.deleted", {
           userId: acting,
           targetUserId: id,
+          tenantId: reqTenant(req),
         })
         return r
       } catch (err) {

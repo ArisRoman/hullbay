@@ -12,6 +12,10 @@ export interface ExternalIdentity {
   issuer: string | null      // NULL pour local / ldap-bind
   subject: string            // identifiant stable : local:<id> / iss+sub / objectGUID…
   email?: string | null
+  /** Vrai uniquement si l'IdP affirme l'email vérifié (OIDC `email_verified`,
+   *  SSO-callback d'entrée). LDAP/OAuth2 = undefined → assimilé false.
+   *  GARDE B5 : un User existant n'est réutilisé qu'avec un email vérifié. */
+  emailVerified?: boolean
   name?: string
   groups?: string[]
 }
@@ -77,11 +81,15 @@ export class AuthError extends Error {
   status: number
   /** UserId résolu quand un échec concerne un compte existant (audit corrélé). */
   userId?: string
+  /** Cause machine d'un échec (ex. "account_disabled_or_locked"). Jamais
+   *  sérialisée vers le client : sert uniquement à l'audit (C4). */
+  reason?: string
 
-  constructor(code: AuthErrorCode, message: string, status = 400) {
+  constructor(code: AuthErrorCode, message: string, status = 400, reason?: string) {
     super(message)
     this.name = "AuthError"
     this.code = code
     this.status = status
+    this.reason = reason
   }
 }

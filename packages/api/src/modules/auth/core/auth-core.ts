@@ -34,6 +34,8 @@ function trace(event: AuthAuditEvent, data: Record<string, unknown>): void {
 
 // ── Helpers internes ──
 
+const ROLE_RANK: Record<string, number> = { viewer: 0, operator: 1, owner: 2 }
+
 async function findLocalIdentityByUserId(userId: string) {
   return prisma.authIdentity.findFirst({
     where: { userId, kind: "local" },
@@ -82,7 +84,8 @@ export async function userHasMfaFactor(userId: string): Promise<boolean> {
  * - compte externe : aucune 2e MFA locale par défaut, sauf si la politique
  *   (SecurityPolicy.mfaRequireRoles) cible le rôle ET qu'aucun facteur n'existe.
  */
-export async function getUserMfaState(userId: string): Promise<{ mfaEnabled: boolean; mfaRequired: boolean }> {
+/** État MFA d'un utilisateur DANS un tenant (politique du tenant, pas du défaut). */
+export async function getUserMfaState(userId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<{ mfaEnabled: boolean; mfaRequired: boolean }> {
   const identities = await prisma.authIdentity.findMany({
     where: { userId },
     select: { kind: true, mfaEnabled: true },
@@ -92,9 +95,10 @@ export async function getUserMfaState(userId: string): Promise<{ mfaEnabled: boo
   if (local) {
     return { mfaEnabled, mfaRequired: !local.mfaEnabled }
   }
-  // Rôle via membership (Phase 5B) : la politique MFA cible les rôles effectifs.
-  const role = await resolveRoleForUser(userId)
-  const required = securityPolicy.getPolicy().mfaRequireRoles.includes(role.toLowerCase())
+  // Rôle via membership : la politique MFA cible les rôles effectifs
+  // DANS le tenant demandé (pas le rôle miroir global). Policy tenant, pas défaut.
+  const role = await resolveRoleForUser(userId, tenantId)
+  const required = securityPolicy.getPolicyCached(tenantId).mfaRequireRoles.includes(role.toLowerCase())
   return { mfaEnabled, mfaRequired: required && !mfaEnabled }
 }
 
@@ -266,8 +270,30 @@ export async function countUsers(): Promise<number> {
   return prisma.user.count()
 }
 
-export async function listUsers() {
-  const users = await prisma.user.findMany({ orderBy: { createdAt: "asc" } })
+/**
+ * Liste les utilisateurs du tenant demandé (rôle effectif depuis membership).
+ * scopé au tenant — un owner n'enumère plus les utilisateurs
+ * des autres tenants.
+ */
+export async function listUsers(tenantId: string = DEFAULT_TENANT_ID) {
+  // Membres du tenant d'abord (source unique depuis 5B), puis leurs identités.
+  // Guards `typeof` (au lieu d'une référence directe) : TS considère le modèle
+  // Prisma toujours défini à runtime — les guards servent aux harnais mockés.
+  const hasMembership = typeof prisma.membership?.findMany === "function"
+  const memberships = hasMembership
+    ? await prisma.membership.findMany({
+        where: { tenantId },
+        select: { userId: true, role: true },
+      })
+    : []
+
+  const ids = memberships.map((m) => m.userId)
+  const users = await prisma.user.findMany({
+    where: hasMembership ? { id: { in: ids } } : undefined,
+    orderBy: { createdAt: "asc" },
+  })
+
+  const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]))
 
   // Batch : UNE requête pour toutes les identités locales au lieu d'un findFirst
   // par user (N+1 → O(1) queries ; évitait `limit` requêtes dans la boucle).
@@ -276,16 +302,6 @@ export async function listUsers() {
     select: { userId: true, mfaEnabled: true },
   })
   const byUserId = new Map(identities.map((i) => [i.userId, i.mfaEnabled]))
-
-  // Rôle effectif via membership (Phase 5B) : batch sur le tenant par défaut,
-  // repli sur le miroir legacy pour les comptes sans membership.
-  const memberships = prisma.membership?.findMany
-    ? await prisma.membership.findMany({
-        where: { userId: { in: users.map((u) => u.id) }, tenantId: DEFAULT_TENANT_ID },
-        select: { userId: true, role: true },
-      })
-    : []
-  const roleByUserId = new Map(memberships.map((m) => [m.userId, m.role]))
 
   return users.map((u) => ({
     id: u.id,
@@ -296,11 +312,19 @@ export async function listUsers() {
   }))
 }
 
-export async function createUser(email: string, password: string, role: "operator" | "viewer") {
+export async function createUser(
+  email: string,
+  password: string,
+  role: "operator" | "viewer",
+  tenantId: string = DEFAULT_TENANT_ID,
+) {
   const existing = await prisma.user.findUnique({ where: { email } })
   if (existing) throw new Error("un compte avec cet email existe déjà")
 
-  const tenant = await ensureDefaultTenant()
+  // le compte est créé AVEC une membership dans le tenant
+  // demandé (source de vérité) — plus seulement le tenant par défaut.
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } })
+  if (!tenant) throw new Error("tenant introuvable")
   // Même garantie d'atomicité que createOwner : user + identity + membership
   // sont créés dans UNE transaction (aucun user orphelin si une étape échoue).
   return prisma.$transaction(async (tx) => {
@@ -318,58 +342,97 @@ export async function createUser(email: string, password: string, role: "operato
       },
     })
     await tx.membership.create({
-      data: { userId: user.id, tenantId: tenant.id, role },
+      data: { userId: user.id, tenantId, role },
     })
     return { id: user.id, email: user.email, role: user.role }
   })
 }
 
-export async function setRole(userId: string, role: Role) {
-  // Rôle effectif depuis membership (Phase 5B) ; repli miroir legacy en tests/mocks.
-  const member = await prisma.membership?.findFirst?.({ where: { userId }, select: { role: true } })
+export async function setRole(userId: string, role: Role, tenantId: string = DEFAULT_TENANT_ID) {
+  // Rôle effectif depuis membership du tenant CIBLE : la garde
+  // dernier-owner est scopée au tenant, plus de comptage global cross-tenant.
+  const member = prisma.membership?.findUnique
+    ? await prisma.membership.findUnique({
+        where: { userId_tenantId: { userId, tenantId } },
+        select: { role: true },
+      })
+    : null
   const currentRole = member?.role ?? (await getUser(userId)).role
+  const lowered = (ROLE_RANK[currentRole] ?? 0) > (ROLE_RANK[role] ?? 0)
   if (currentRole === "owner" && role !== "owner") {
     if (!prisma.membership?.count) {
       const owners = await prisma.user.count({ where: { role: "owner" } })
       if (owners <= 1) throw new Error("impossible de rétrograder le dernier owner")
     } else {
-      const owners = await prisma.membership.count({ where: { role: "owner" } })
+      const owners = await prisma.membership.count({ where: { role: "owner", tenantId } })
       if (owners <= 1) throw new Error("impossible de rétrograder le dernier owner")
     }
   }
 
-  const tenant = await ensureDefaultTenant()
-  // Atomicité : user.role et membership.role changent ENSEMBLE ou pas du tout
+  // Atomicité : membership + miroir User.role changent ENSEMBLE ou pas du tout
   // (sinon un crash entre les deux writes laissait un état miroir incohérent).
   return prisma.$transaction(async (tx) => {
-    const u = await tx.user.update({ where: { id: userId }, data: { role } })
-
-    await tx.membership.updateMany({
-      where: { userId, tenantId: tenant.id },
+    const updated = await tx.membership.updateMany({
+      where: { userId, tenantId },
       data: { role },
     })
+    if (updated.count !== 1) {
+      throw new Error("l'utilisateur n'a pas de membership dans ce tenant")
+    }
+
+    // Le miroir User.role (legacy) n'est mis à jour que pour la membership du
+    // tenant par défaut — hors tenant par défaut, la source de vérité est la
+    // membership et le miroir reste volontairement intact.
+    const u =
+      tenantId === DEFAULT_TENANT_ID
+        ? await tx.user.update({ where: { id: userId }, data: { role } })
+        : await tx.user.findUniqueOrThrow({ where: { id: userId } })
 
     return { id: u.id, email: u.email, role: u.role }
+  }).finally(() => {
+    if (lowered) return sessionManager.revokeUserSessions(userId).catch(() => {})
   })
 }
 
-export async function deleteUser(userId: string, actingUserId: string) {
-  if (userId === actingUserId) {
+export async function deleteUser(userId: string, actingUserId: string, tenantId: string = DEFAULT_TENANT_ID) {
+  if (actingUserId === userId) {
     throw new Error("impossible de supprimer son propre compte")
   }
-  // Rôle effectif depuis membership (Phase 5B) ; repli miroir legacy en tests/mocks.
-  const member = await prisma.membership?.findFirst?.({ where: { userId }, select: { role: true } })
+  // Rôle effectif depuis membership du tenant cible ; garde dernier-owner scopée.
+  const member = prisma.membership?.findUnique
+    ? await prisma.membership.findUnique({
+        where: { userId_tenantId: { userId, tenantId } },
+        select: { role: true },
+      })
+    : null
   const currentRole = member?.role ?? (await getUser(userId)).role
   if (currentRole === "owner") {
     if (!prisma.membership?.count) {
       const owners = await prisma.user.count({ where: { role: "owner" } })
       if (owners <= 1) throw new Error("impossible de supprimer le dernier owner")
     } else {
-      const owners = await prisma.membership.count({ where: { role: "owner" } })
+      const owners = await prisma.membership.count({ where: { role: "owner", tenantId } })
       if (owners <= 1) throw new Error("impossible de supprimer le dernier owner")
     }
   }
-  await prisma.user.delete({ where: { id: userId } })
+
+  if (prisma.membership?.deleteMany) {
+    const removed = await prisma.membership.deleteMany({ where: { userId, tenantId } })
+    if (removed.count !== 1) {
+      throw new Error("l'utilisateur n'a pas de membership dans ce tenant")
+    }
+    // Le User global n'est supprimé QUE si l'utilisateur n'a plus AUCUNE
+    // membership ailleurs (Correction A4 : plus du compte cross-tenant).
+    const remaining = await prisma.membership.count({ where: { userId } })
+    if (remaining === 0) {
+      await prisma.user.delete({ where: { id: userId } })
+    }
+  } else {
+    // Prisma partiellement mocké en tests : sans modèle membership, on conserve
+    // l'ancien comportement (suppression globale).
+    await prisma.user.delete({ where: { id: userId } })
+  }
+  await sessionManager.revokeUserSessions(userId).catch(() => {})
   return { ok: true as const }
 }
 

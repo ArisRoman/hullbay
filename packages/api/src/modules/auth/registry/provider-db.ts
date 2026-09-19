@@ -46,6 +46,8 @@ export type ProviderDbRow = {
   name: string
   enabled: boolean
   config: Record<string, unknown>
+  /** B5B : null = provider global (disponible pour tous les tenants). */
+  tenantId: string | null
 }
 
 /**
@@ -82,6 +84,7 @@ export async function loadProviderRows(): Promise<ProviderDbRow[]> {
     kind: row.kind as ProviderKind,
     name: row.name,
     enabled: row.enabled,
+    tenantId: row.tenantId,
     config: decryptObject(
       (row.config as Record<string, unknown>) ?? {},
       SENSITIVE_FIELDS_BY_KIND[row.kind as ProviderKind] ?? [],

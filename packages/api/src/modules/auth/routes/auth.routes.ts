@@ -11,7 +11,7 @@ import { requireRole, currentUser } from "../authorization/rbac"
 import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
 import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 import { sessionManager } from "../core/session-manager"
-import { authRateLimiter } from "../rate-limit"
+import { authRateLimiter, rateLimitTenant } from "../rate-limit"
 import { registerUsersRoutes } from "./users.routes"
 import { authService } from "../service"
 import { securityPolicy } from "../policies/security-policy.service"
@@ -61,14 +61,14 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const body = req.body as { email: string; password: string }
       const key = authRateLimiter.keyFor(req.ip, "/api/auth/bootstrap")
-      const before = authRateLimiter.check(key)
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
       try {
         const user = await authService.createOwner(body.email, body.password)
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
         return { ok: true, id: user.id }
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 409)
         return reply.code(status).send(payload)
       }
@@ -100,15 +100,15 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const body = req.body as { email: string; password: string }
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/login", body.email)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/login", body.email, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
       try {
         const result = await authService.login(body.email, body.password)
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
         return result
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 401)
         return reply.code(status).send(payload)
       }
@@ -136,15 +136,15 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       // décodé sans vérification : sinon un attaquant forgerait `sub` pour
       // échapper au throttle par compte et brute-forcer le TOTP.
       const account = createHash("sha256").update(body.pendingToken).digest("hex").slice(0, 32)
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/verify", account)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/verify", account, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
       try {
         const result = await authService.verifyMfa(body.pendingToken, body.code)
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
         return result
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 401)
         return reply.code(status).send(payload)
       }
@@ -176,16 +176,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const user = (req as FastifyRequest & { user: { sub: string } }).user
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/confirm", user.sub)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/mfa/confirm", user.sub, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
       try {
         const body = req.body as { code: string }
         const result = await authService.confirmMfaEnrollment(user.sub, body.code)
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
         return result
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 400)
         return reply.code(status).send(payload)
       }
@@ -247,7 +247,9 @@ export async function registerAuthRoutes(app: FastifyInstance) {
           : [])
       // Compte local : enrôlement obligatoire. Compte externe (LDAP/OIDC/SAML) :
       // pas de 2e MFA locale, sauf si la politique cible le rôle.
-      const policyRequires = securityPolicy.getPolicy().mfaRequireRoles.includes((role ?? "").toLowerCase())
+      const policyRequires = securityPolicy
+        .getPolicyCached(activeTenantId)
+        .mfaRequireRoles.includes((role ?? "").toLowerCase())
       const mfaRequired = local
         ? !local.mfaEnabled
         : Boolean(u) && policyRequires && !mfaEnabled
@@ -326,16 +328,16 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const user = (req as FastifyRequest & { user: { sub: string } }).user
-      const key = authRateLimiter.keyFor(req.ip, "/api/auth/password", user.sub)
-      const before = authRateLimiter.check(key)
+      const key = authRateLimiter.keyFor(req.ip, "/api/auth/password", user.sub, rateLimitTenant(req))
+      const before = authRateLimiter.check(key, rateLimitTenant(req))
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
       try {
         const body = req.body as { currentPassword: string; newPassword: string }
         const result = await authService.changePassword(user.sub, body.currentPassword, body.newPassword)
-        authRateLimiter.reset(key)
+        authRateLimiter.reset(key, rateLimitTenant(req))
         return result
       } catch (err) {
-        authRateLimiter.recordFailure(key)
+        authRateLimiter.recordFailure(key, rateLimitTenant(req))
         const { status, payload } = serializeError(err, 400)
         return reply.code(status).send(payload)
       }

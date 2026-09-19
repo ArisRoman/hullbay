@@ -9,6 +9,7 @@ import { createProvider } from "../providers/protocol-adapter"
 import type { AuthProviderContract, ProviderKind } from "../providers/types"
 import { PROVIDER_SEEDS, loadTestOidcSeed, loadTestSamlSeed } from "./seeds"
 import { loadProviderRows } from "./provider-db"
+import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 
 /** Kinds pour lesquels un adapter existe (createProvider ne throw pas). */
 export const SUPPORTED_KINDS: ProviderKind[] = ["local", "oidc", "oauth2", "saml", "ldap"]
@@ -69,6 +70,13 @@ export class ProviderRegistry {
     const rows = await loadProviderRows()
     const next = new Map<string, AuthProviderContract>()
     for (const row of rows) {
+      // B5B-2 : le registre n'expose que les providers globaux (tenantId null,
+      // partagés par tous les tenants) et ceux du tenant défaut. Les providers
+      // d'un autre tenant ne doivent jamais être résolvables ici — sinon un
+      // login SSO d'un tenant voisin fuirait dans le registre partagé.
+      if (row.tenantId !== null && row.tenantId !== DEFAULT_TENANT_ID) {
+        continue
+      }
       if (!SUPPORTED_KINDS.includes(row.kind)) {
         continue
       }

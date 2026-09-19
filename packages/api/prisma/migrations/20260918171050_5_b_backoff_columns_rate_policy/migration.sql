@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "SecurityPolicy" ADD COLUMN     "rateBaseBackoffMs" INTEGER NOT NULL DEFAULT 30000,
+ADD COLUMN     "rateMaxBackoffMs" INTEGER NOT NULL DEFAULT 600000;

@@ -75,7 +75,7 @@ export async function processSsoCallback(identity: ExternalIdentity): Promise<Ss
   // MFA locale : par défaut NON exigée après un SSO validé par l'IdP (§10).
   const tenantId = await resolveTenantIdForUser(user.id)
   const role = await resolveRoleForUser(user.id, tenantId, user.role)
-  const token = sessionManager.signSession(user.id, role, true, "local", tenantId)
+  const token = sessionManager.signSession(user.id, role, true, identity.providerId ?? "local", tenantId)
 
   return {
     pending: false,

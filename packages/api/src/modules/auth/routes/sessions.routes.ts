@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { prisma } from "../../../lib/prisma"
-import { listSessions, revokeSession } from "../sessions/session.service"
+import { listSessions, revokeSession, revokeUserSessions } from "../sessions/session.service"
 
 type SessionUser = { sub?: string; jti?: string }
 
@@ -35,6 +35,18 @@ export async function registerSessionsRoutes(app: FastifyInstance) {
       }
 
       await revokeSession(jti)
+      return reply.code(204).send()
+    },
+  )
+
+  app.delete(
+    "/api/auth/sessions",
+    { schema: { tags: ["auth"], summary: "Révoquer toutes mes sessions sauf la courante" } },
+    async (req, reply) => {
+      const { sub: userId, jti } = currentUser(req)
+      if (!userId) return reply.code(401).send({ error: "non authentifié" })
+
+      await revokeUserSessions(userId, jti)
       return reply.code(204).send()
     },
   )

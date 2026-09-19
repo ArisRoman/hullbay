@@ -9,9 +9,16 @@
  *
  * Persistance en mémoire process-local — seuils configurés par la politique de
  * sécurité (5A1 : env ; 5A2 : par tenant). `clear()` sert aux tests.
+ *
+ * C2 — CONTRAINTE DE DÉPLOIEMENT : buckets process-local. En multi-instance, le
+ * compteur d'échecs est par instance (répartition des tentatives) ; un attaquant
+ * distribué peut diviser le budget. Single-instance requis pour une anti-force
+ * stricte ; en cluster, compléter par une cage au niveau du proxy/edge.
  */
 
+import type { FastifyRequest } from "fastify"
 import { securityPolicy } from "./policies/security-policy.service"
+import { DEFAULT_TENANT_ID } from "./identity/auth-identity.service"
 
 export interface RateLimitConfig {
   maxFailures: number
@@ -27,9 +34,11 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   maxBackoffMs: 600_000,
 }
 
-/** Config initiale depuis la politique de sécurité (env en 5A1, tenant en 5A2). */
-function configFromPolicy(): RateLimitConfig {
-  const p = securityPolicy.getPolicy()
+/** Config initiale depuis la politique de sécurité (env en 5A1, tenant en 5A2).
+ *  Le tenant est relu par appel (B2 : seuils par tenant) — `getPolicyCached`
+ *  synchronise le cache tenant, pas seulement le défaut. */
+function configFromPolicy(tenantId?: string): RateLimitConfig {
+  const p = securityPolicy.getPolicyCached(tenantId ?? DEFAULT_TENANT_ID)
   return {
     maxFailures: p.loginFailLimit,
     windowMs: p.loginFailWindowMs,
@@ -50,35 +59,37 @@ export interface RateLimitDecision {
 }
 
 export class CompositeRateLimiter {
-  private readonly configSource: () => RateLimitConfig
+  private readonly configSource: (tenantId?: string) => RateLimitConfig
   private buckets = new Map<string, Bucket>()
 
   /**
    * `config` peut être un objet statique (tests) ou un provider relu à chaque
    * appel — indispensable pour que les changements de politique (5A2, par
-   * tenant) s'appliquent sans redémarrage.
+   * tenant) s'appliquent sans redémarrage. Le provider prend le tenantId
+   * effectif de la requête (seuils par tenant, B2).
    */
-  constructor(config: Partial<RateLimitConfig> | (() => Partial<RateLimitConfig>) = {}) {
+  constructor(config: Partial<RateLimitConfig> | ((tenantId?: string) => Partial<RateLimitConfig>) = {}) {
     if (typeof config === "function") {
-      this.configSource = () => ({ ...DEFAULT_CONFIG, ...config() })
+      this.configSource = (tenantId) => ({ ...DEFAULT_CONFIG, ...config(tenantId) })
     } else {
       const staticConfig = { ...DEFAULT_CONFIG, ...config }
       this.configSource = () => staticConfig
     }
   }
 
-  private config(): RateLimitConfig {
-    return this.configSource()
+  private config(tenantId?: string): RateLimitConfig {
+    return this.configSource(tenantId)
   }
 
-  keyFor(ip: string, endpoint: string, account?: string): string {
+  keyFor(ip: string, endpoint: string, account?: string, tenantId?: string): string {
     const accountPart = account ? `|${account.trim().toLowerCase()}` : ""
-    return `${ip}|${endpoint}${accountPart}`
+    const tenantPart = tenantId ? `|tenant:${tenantId}` : ""
+    return `${ip}|${endpoint}${accountPart}${tenantPart}`
   }
 
   /** Vérifie avant tentative : si bloqué, renvoie le délai restant à respecter. */
-  check(key: string): RateLimitDecision {
-    this.evict()
+  check(key: string, tenantId?: string): RateLimitDecision {
+    this.evict(tenantId)
     const bucket = this.buckets.get(key)
     if (!bucket) return { blocked: false }
     const now = Date.now()
@@ -92,9 +103,9 @@ export class CompositeRateLimiter {
    * Enregistre un échec (après une tentative rejetée). Quand le seuil de la
    * fenêtre glissante est atteint, arme un blocage avec backoff exponentiel.
    */
-  recordFailure(key: string): void {
-    this.evict()
-    const config = this.config()
+  recordFailure(key: string, tenantId?: string): void {
+    this.evict(tenantId)
+    const config = this.config(tenantId)
     const now = Date.now()
     let bucket = this.buckets.get(key)
     if (!bucket) {
@@ -112,7 +123,7 @@ export class CompositeRateLimiter {
   }
 
   /** Succès d'authentification : efface l'historique du compteur. */
-  reset(key: string): void {
+  reset(key: string, _tenantId?: string): void {
     this.buckets.delete(key)
   }
 
@@ -127,10 +138,10 @@ export class CompositeRateLimiter {
 
   // Prévention fuite mémoire : au-delà d'un seuil de buckets, purge les buckets
   // sans activité après windowMs + maxBackoffMs.
-  private evict(): void {
+  private evict(tenantId?: string): void {
     if (this.buckets.size < 4096) return
     const now = Date.now()
-    const config = this.config()
+    const config = this.config(tenantId)
     const stale = config.windowMs + config.maxBackoffMs
     for (const [key, bucket] of this.buckets) {
       const lastActivity =
@@ -142,3 +153,14 @@ export class CompositeRateLimiter {
 
 /** Instance partagée process-local, utilisée par les routes d'authentification. */
 export const authRateLimiter = new CompositeRateLimiter(configFromPolicy)
+
+/**
+ * Tenant à engager dans la clé de rate-limit (B1) : post-auth → tenant de session
+ * (claim) sinon tenant de requête ; pré-auth (login, bootstrap) → aucun contexte,
+ * tenant par défaut. Isole les buckets par tenant — un compte du tenant A ne
+ * sature pas le bucket du même compte/email au tenant B.
+ */
+export function rateLimitTenant(req: FastifyRequest): string {
+  const scoped = req as FastifyRequest & { user?: { tenantId?: string }; tenantId?: string }
+  return scoped.user?.tenantId ?? scoped.tenantId ?? DEFAULT_TENANT_ID
+}

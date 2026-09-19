@@ -50,6 +50,9 @@ export interface OidcProviderOptions {
   discoveryUrl?: string
   /** JWKS URI en surcharge (tests/fixtures). Sinon celle du discovery. */
   jwksUri?: string
+  /** Tolérance d'horloge entre ce SP et l'IdP, ms (C8). Défaut 30000 ms —
+   *  évite les faux négatifs si l'horloge de l'IdP dérive de quelques secondes. */
+  acceptedClockSkewMs?: number
   /** fetch injectable (tests fixtures) ; défaut = fetch global. */
   fetchFn?: typeof fetch
 }
@@ -196,6 +199,7 @@ export class OidcProvider implements AuthProviderContract {
       subject: claims.sub ?? "",
       email: claims.email,
       name: claims.name,
+      emailVerified: claims.email_verified === true,
     }
   }
 
@@ -248,6 +252,7 @@ export class OidcProvider implements AuthProviderContract {
         algorithms: ["RS256"],
         issuer: this.options.issuer,
         audience: this.options.clientId,
+        clockTolerance: this.options.acceptedClockSkewMs ?? 30000,
       }) as IdTokenClaims
     } catch {
       throw new AuthError("invalid_credentials", "id_token invalide (signature/iss/aud/exp)", 400)
