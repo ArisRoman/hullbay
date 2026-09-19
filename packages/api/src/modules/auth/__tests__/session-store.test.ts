@@ -1,10 +1,24 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest"
 import { UserSessionStore } from "../sessions/user-session.store"
 import { jwksService } from "../jwks/jwks.service"
-import jwt from "jsonwebtoken"
+
+const TEST_JWT_SECRET = "session-store-test-secret"
+const savedJwtSecret = process.env.JWT_SECRET
 
 describe("UserSessionStore", () => {
   let store: UserSessionStore
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = TEST_JWT_SECRET
+  })
+
+  afterAll(() => {
+    if (savedJwtSecret === undefined) {
+      delete process.env.JWT_SECRET
+    } else {
+      process.env.JWT_SECRET = savedJwtSecret
+    }
+  })
 
   beforeEach(() => {
     store = new UserSessionStore()
@@ -25,7 +39,7 @@ describe("UserSessionStore", () => {
   })
 
   it("verifySession rejette un token sans jti", () => {
-    const token = jwt.sign({ sub: "u-1", role: "owner" }, process.env.JWT_SECRET ?? "fallback", { expiresIn: "12h", audience: "session" })
+    const token = jwksService.signPayload({ sub: "u-1", role: "owner" }, { audience: "session" })
     expect(() => store.verifySession(token)).toThrow("sans jti")
   })
 

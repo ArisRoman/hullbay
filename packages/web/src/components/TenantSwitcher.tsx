@@ -38,8 +38,8 @@ export function TenantSwitcher() {
         >
           <span className="flex min-w-0 items-center gap-2">
             <Buildings className="shrink-0 text-ui-fg-muted" />
-            <span className="truncate text-ui-fg-base" title={active?.slug ?? ""}>
-              {active?.slug ?? t("tenantSwitcher.unknownTenant")}
+            <span className="truncate text-ui-fg-base" title={active?.tenant?.slug ?? ""}>
+              {active?.tenant?.slug ?? t("tenantSwitcher.unknownTenant")}
             </span>
           </span>
           <ChevronDownMini className="shrink-0 text-ui-fg-muted" />
@@ -55,8 +55,8 @@ export function TenantSwitcher() {
               onClick={() => void switchTenant(tenant.tenantId)}
               className="flex items-center justify-between gap-2"
             >
-              <span className="truncate" title={tenant.slug}>
-                {tenant.slug}
+              <span className="truncate" title={tenant.tenant.slug}>
+                {tenant.tenant.slug}
               </span>
               <span className="flex shrink-0 items-center gap-1.5">
                 <Badge color={BADGE_COLOR[tenant.role]} size="2xsmall" className="capitalize">

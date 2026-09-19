@@ -502,7 +502,7 @@ export type Environment = "development" | "test" | "production";
 export type MemberTenant = {
   tenantId: string;
   role: "owner" | "operator" | "viewer";
-  slug: string;
+  tenant: { slug: string };
 };
 
 /** Profil exposé par GET /api/auth/me (phase 5B : le rôle suit le tenant actif de session). */

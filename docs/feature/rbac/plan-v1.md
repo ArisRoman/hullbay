@@ -222,7 +222,7 @@ Role → Permissions → Resource Scope → @policy → ALLOW / DENY
 3. **FK `Membership.roleId` dès R1**, shadow drop R8.
 4. **Audit TOUS les refus** (DENY → AuditLog : subject/action/resource/scope/reason).
 5. **Re-résolution serveur** à chaque `require()` (pas de réveil de sessions au change).
-6. Rapport matérialisé dans `docs/AUTHORIZATION_REPORT.md`.
+6. Rapport matérialisé dans `docs/feature/rbac/plan-v1.md`.
 7. Teams : scope porte sur le bind Team-Role (une entrée par scope).
 8. Audit lecture : conservé operator aujourd'hui (défaut proposé viewer à confirmer).
 9. Root : rôle système protégé, owner n'est PAS auto-Root.
