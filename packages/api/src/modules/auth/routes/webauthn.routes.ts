@@ -1,5 +1,5 @@
 /**
- * Routes de gestion et d'authentification WebAuthn / Passkeys (Phase 5A3).
+ * Routes de gestion et d'authentification WebAuthn / Passkeys.
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"

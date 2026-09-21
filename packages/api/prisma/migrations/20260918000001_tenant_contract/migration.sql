@@ -1,5 +1,5 @@
--- Phase 5B — tenant-scoping (contract) : tenantId NOT NULL.
--- Fin de la stratégie expand/contract. La migration expand (5_b_tenant_scope) a
+-- Tenant-scoping (contract) : tenantId NOT NULL.
+-- Fin de la stratégie expand/contract. La migration expand (tenant_scope) a
 -- backfillé toutes les lignes vers 'tenant-default' ; on peut donc resserrer.
 -- AuthProvider tient des providers GLOBAUX (tenantId NULL) et AuditLog consigne
 -- des événements système sans tenant : ces deux colonnes restent NULLABLE.

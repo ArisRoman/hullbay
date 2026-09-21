@@ -51,7 +51,7 @@ export interface PruneDeps {
 }
 
 /**
- * Prune des ressources orphelines. Phase 5B : scopé par tenant — un tenant ne
+ * Prune des ressources orphelines. Scopé par tenant — un tenant ne
  * peut pruner QUE les clusters de son tenant (pas ceux d'un autre, pas tous).
  * `knownProjectIds` reste GLOBAL (un projet vivant ailleurs n'est jamais orphelin).
  */

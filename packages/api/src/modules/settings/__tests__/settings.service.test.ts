@@ -15,7 +15,7 @@ vi.mock("../caddy-domain", () => ({
 
 import { settingsService } from "../service";
 
-// Phase 5B : settings par tenant (ex-singleton). Tenant par défaut en fallback.
+// Settings par tenant (ex-singleton). Tenant par défaut en fallback.
 const DEFAULT_TENANT_ID = "tenant-default";
 
 describe("SettingsService", () => {

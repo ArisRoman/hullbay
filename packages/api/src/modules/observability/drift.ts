@@ -4,7 +4,7 @@
  * d'ObservabilityService (qui lui est désormais lié à un cluster précis via
  * forCluster()) : le drift est un concept par PROJET, jamais par cluster.
  *
- * Phase 5B : la clé de stockage inclut le tenantId — un tenant ne voit JAMAIS le
+ * La clé de stockage inclut le tenantId — un tenant ne voit JAMAIS le
  * drift d'un autre tenant, même si un event d'un autre process transite par Redis.
  */
 

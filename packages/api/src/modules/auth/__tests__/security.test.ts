@@ -15,7 +15,7 @@ import { registerDeploySubscribers } from "../../../subscribers/on-deploy-finish
 // rate-limiting composé, anti-énumération, cloisonnement des audiences JWT et
 // alimentation du journal d'audit.
 //
-// Phase 2 : les credentials vivent sur AuthIdentity(local) — on mocke donc
+// Les credentials vivent sur AuthIdentity(local) — on mocke donc
 // prisma.authIdentity (plus prisma.user) comme lookup de connexion.
 
 vi.mock("../../../lib/prisma", () => {
@@ -68,7 +68,7 @@ const PASSWORD = "F12345678";
 const SALT = "00112233445566778899aabbccddeeff";
 const PASSWORD_HASH = `${SALT}:${scryptSync(PASSWORD, SALT, 64).toString("hex")}`;
 
-// AuthIdentity(local) : les credentials sont portés par l'identité depuis la Phase 2.
+// AuthIdentity(local) : les credentials sont portés par l'identité.
 const IDENTITY_USER = {
   id: "i-1",
   userId: "u-1",

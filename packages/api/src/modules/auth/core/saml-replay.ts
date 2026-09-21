@@ -1,5 +1,5 @@
 /**
- * Anti-replay SAML (Phase 4) : enregistre les assertions déjà consommées.
+ * Anti-replay SAML : enregistre les assertions déjà consommées.
  *
  * Un IdP peut rejouer une SAMLResponse identique (ou une assertion valide
  * copiée). On empreinte la réponse brute (SHA-256) et on refuse toute réponse
@@ -11,7 +11,7 @@
  * store complète la protection pour les réponses SANS InResponseTo que
  * certains IdP n'émettent pas.
  *
- * C2 — CONTRAINTE DE DÉPLOIEMENT : store process-local (Map mémoire). Voir
+ * CONTRAINTE DE DÉPLOIEMENT : store process-local (Map mémoire). Voir
  * auth-state.ts — en multi-instance, l'empreinte d'une assertion validée sur A
  * est invisible sur B (rejeu possible). Même exigence : single-instance ou
  * affinité sticky pour le callback SAML.

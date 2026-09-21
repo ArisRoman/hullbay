@@ -10,7 +10,7 @@ const BADGE_COLOR: Record<string, "purple" | "blue" | "green"> = {
 }
 
 /**
- * Switcher de tenant actif (Phase 5B §14). Session-scoped (§87) : la bascule
+ * Switcher de tenant actif. Session-scoped : la bascule
  * re-signe le JWT avec un nouveau claim tenantId ; aucune route URL :tenantSlug.
  * N'apparaît que lorsque le compte est membre de plusieurs tenants.
  */

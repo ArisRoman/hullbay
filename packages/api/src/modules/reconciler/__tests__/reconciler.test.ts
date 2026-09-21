@@ -166,7 +166,7 @@ describe("POST /api/rebuild-from-docker", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("devrait skiper les clusters non prêts (garde A1)", async () => {
+  it("devrait skiper les clusters non prêts", async () => {
     vi.mocked(prisma.cluster.findMany).mockResolvedValue([
       { id: "ready-cluster", status: "ready" },
       { id: "pending-cluster", status: "pending" },
@@ -197,7 +197,7 @@ describe("POST /api/rebuild-from-docker", () => {
     expect(rebuildModule.rebuildFromDocker).toHaveBeenCalledTimes(1);
   });
 
-  it("devrait skiper un cluster ready mais au Swarm inactif (garde A1)", async () => {
+  it("devrait skiper un cluster ready mais au Swarm inactif", async () => {
     vi.mocked(prisma.cluster.findMany).mockResolvedValue([
       { id: "inactive-cluster", status: "ready" },
     ] as any);

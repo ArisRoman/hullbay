@@ -183,7 +183,7 @@ Exécutés avec vitest v4.1.11 : `npm run test -w @hullbay/api`. Sous-ensemble a
 | A3-L4 | utilisateur introuvable → 401 fail-closed | PASS |
 | A3-L5 | mauvais mot de passe 2e bind → 401 | PASS |
 | A3-L6 | compte AD désactivé/verrouillé (UAC) rejeté | PASS |
-| A3-L7 | IdentityPendingError propagé (workflow 5A) | PASS |
+| A3-L7 | IdentityPendingError propagé si l'identité n'est pas encore approuvée | PASS |
 | A3-L8 | identifiant stable OpenLDAP entryUUID | PASS |
 | A3-L9 | décodage binaire attribut stable (explicitBufferAttributes) | PASS |
 | A3-L10 | stable binaire non-objectGUID → hexadécimal | PASS |
@@ -334,8 +334,8 @@ Exécutés avec vitest v4.1.11 : `npm run test -w @hullbay/api`. Sous-ensemble a
 | A8-P10 | DELETE — provider utilisé → 409 | PASS |
 | A8-P11 | DELETE — id inconnu → 404 | PASS |
 | A8-P12 | POST /test — config incomplète → ok:false sans détail | PASS |
-| A8-P13 | GET — liste restreinte au tenant courant + globaux (B5B) | PASS |
-| A8-P14 | PUT — provider d'un autre tenant → 404 (isolation B5B) | PASS |
+| A8-P13 | GET — liste restreinte au tenant effectif : tenant courant + globaux | PASS |
+| A8-P14 | PUT — provider d'un autre tenant → 404 (anti-fuite cross-tenant) | PASS |
 | A8-P15 | POST — sans tenantId → provider global (tenantId null) | PASS |
 | A8-P16 | GET — liste des identités en attente | PASS |
 | A8-P17 | approve — transaction User+AuthIdentity+Membership, event | PASS |

@@ -197,7 +197,7 @@ export class ObservabilityService {
   }
 }
 
-/** Phase 5B : santé scopée par tenant (jamais tous les clusters, tous tenants). */
+/** Santé scopée par tenant (jamais tous les clusters, tous tenants). */
 export async function systemHealth(tenantId?: string): Promise<ClusterHealth[]> {
   const clusters = await prisma.cluster.findMany({
     where: tenantId ? { tenantId } : {},

@@ -31,7 +31,7 @@ const CreateSecretSchema = z.object({
 
 const clusterParams = z.object({ clusterId: z.string() })
 
-/** Phase 5B : le cluster cible doit appartenir au tenant de la requête (404 sinon). */
+/** Le cluster cible doit appartenir au tenant de la requête (404 sinon). */
 async function ensureClusterInTenant(
   clusterId: string,
   req: FastifyRequest,

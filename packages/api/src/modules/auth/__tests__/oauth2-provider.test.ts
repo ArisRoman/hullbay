@@ -1,5 +1,5 @@
 /**
- * Tests OAuth2 générique (Phase 3, §15.2) — fixtures MockOauth2 sans réseau.
+ * Tests OAuth2 générique — fixtures MockOauth2 sans réseau.
  * Cas : flow complet (state/subject/groups), anti-replay state, erreurs
  * (manquants, state inconnu, échange refusé, userinfo KO, sujet absent),
  * pas d'integrations vendor (config explicite, aucune branche par provider).

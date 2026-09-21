@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Backfill multi-tenancy (Phase 5B) — idempotent (peut s'exécuter plusieurs fois).
+ * Backfill multi-tenancy — idempotent (peut s'exécuter plusieurs fois).
  *
  * Étape 0 : crée le tenant par défaut ("Default"/"default") si absent.
  * Étape 1 : backfill les lignes SANS tenantId vers le tenant par défaut. Dans le

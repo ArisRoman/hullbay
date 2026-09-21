@@ -1,5 +1,5 @@
 /**
- * Primitives OIDC/OAuth2 sans dépendance vendor (Phase 3, §15 du plan).
+ * Primitives OIDC/OAuth2 sans dépendance vendor.
  * node:crypto uniquement. La vérif RS256 passe par jsonwebtoken + construction
  * de clé publique depuis JWK (node:crypto).
  *

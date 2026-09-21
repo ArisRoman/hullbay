@@ -137,7 +137,7 @@ function parseTransports(raw?: string | null): any | undefined {
 
 // ── Store temporaire de challenges en mémoire bornée ──
 //
-// C2 — CONTRAINTE DE DÉPLOIEMENT : process-local. En multi-instance, un
+// CONTRAINTE DE DÉPLOIEMENT : process-local. En multi-instance, un
 // challenge émis sur A n'est pas vérifiable sur B (assertion WebAuthn rejetée).
 // Single-instance ou affinité sticky requis pour les cérémonies WebAuthn.
 
@@ -260,7 +260,7 @@ export async function verifyWebauthnRegistration(
     })
   } catch (err) {
     // Détail (RP ID/origine attendus, etc.) loggé côté serveur uniquement.
-    void eventBus.emit(AUTH_AUDIT_EVENTS.mfaFailed, { userId, factor: "webauthn", phase: "registration" }).catch(() => {})
+    void eventBus.emit(AUTH_AUDIT_EVENTS.mfaFailed, { userId, factor: "webauthn", step: "registration" }).catch(() => {})
     if (err instanceof Error) console.error("[webauthn] registration verification failed:", err.message)
     throw new AuthError("mfa_code_invalid", "vérification de la clé de sécurité échouée", 400)
   }
@@ -390,7 +390,7 @@ export async function verifyWebauthnAuthentication(
     throw new AuthError("mfa_code_invalid", "vérification de la clé de sécurité échouée", 400)
   }
 
-  // Garde C6 : un compteur non strictement croissant signale une copie du
+  // Garde : un compteur non strictement croissant signale une copie du
   // credential ou une réinitialisation (rejeu). On refuse — sans jamais
   // persister le nouveau compteur — pour empêcher que la copie devienne la
   // référence officielle.

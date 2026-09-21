@@ -1,5 +1,5 @@
 /**
- * Tests OIDC générique (Phase 3, §19 plan) — fixtures MockIdp sans réseau.
+ * Tests OIDC générique — fixtures MockIdp sans réseau.
  * Cas : flow complet, issuer/audience/signature/expiration, nonce, state
  * (anti-replay), PKCE, rotation JWKS, double-issuer (aucune branche vendor).
  */

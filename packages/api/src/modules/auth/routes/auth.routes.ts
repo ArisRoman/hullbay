@@ -266,7 +266,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     },
   )
 
-  // ── Bascule du tenant actif de session (Phase 5B §14) — re-sign du JWT ──
+  // ── Bascule du tenant actif de session — re-sign du JWT ──
   const switchTenantBody = z.object({ tenantId: z.string().min(1) })
 
   app.post(

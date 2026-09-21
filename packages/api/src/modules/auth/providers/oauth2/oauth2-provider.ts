@@ -1,5 +1,5 @@
 /**
- * Provider OAuth2 générique (autorization_code) — flux "GitHub-style" (§15.2).
+ * Provider OAuth2 générique (authorization_code) — flux "GitHub-style".
  *
  * Configuration = endpoints explicites (authorizationUri, tokenUri, userinfoUri),
  * clientId/secret, scopes, groupAttr optionnel. Aucune intégration vendor :
@@ -10,7 +10,7 @@
  * si injoignable ou si aucun sub/id stable). issuer = null (pas de notion
  * d'issuer en OAuth2) : l'identité stable = (providerId, subject=user id).
  *
- * Comme OIDC : pas d'`authenticate()` — initiateLogin → callback (§15.2).
+ * Comme OIDC : pas d'`authenticate()` — initiateLogin → callback.
  */
 
 import type {

@@ -1,7 +1,7 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 /**
- * Tests E2E des parcours de connexion auth ajoutés en 5A3 :
+ * Tests E2E des parcours de connexion auth :
  *  - connexion LDAP (formulaire annuaire) ;
  *  - challenge MFA par clé de sécurité / passkey.
  * L'API est stubée ; la cérémonie WebAuthn navigateur est simulée.

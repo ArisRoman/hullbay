@@ -272,7 +272,7 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
         </div>
       )}
 
-      {/* Pending SSO : identité externe en attente d'approbation (workflow 5A) */}
+      {/* Pending SSO : identité externe en attente d'approbation */}
       {wasPending && (
         <div
           role="status"

@@ -1,5 +1,5 @@
 /**
- * PendingApprovalService (Phase 5A1, correction N°20 du plan) : workflow
+ * PendingApprovalService : workflow
  * d'approbation des identités externes. Une identité inconnue d'un IdP est
  * matérialisée en PendingIdentity par identity-mapping.resolveIdentity — JAMAIS
  * de User créé en auto-provision.
@@ -77,7 +77,7 @@ export async function approvePendingIdentity<const T extends ApproveTarget>(
 
   const result = await prisma.$transaction(async (tx) => {
     // Réutilise le User existant sur cet email (email @unique), sinon le crée.
-    // GARDE B5 : l'email n'est réutilisé que si l'IdP l'a VÉRIFIÉ
+    // GARDE : l'email n'est réutilisé que si l'IdP l'a VÉRIFIÉ
     // (OIDC email_verified). Un provider sans preuve (LDAP/OAuth2) ne peut pas
     // revendiquer un email appartenant à un compte local existant → 409.
     const existingUser = pending.email

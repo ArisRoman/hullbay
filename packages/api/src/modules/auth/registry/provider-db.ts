@@ -1,6 +1,6 @@
 /**
- * Couche de persistance du Provider Registry (Phase 5A1 : AuthProvider = source
- * de vérité, §4.2/§8 du plan).
+ * Couche de persistance du Provider Registry (AuthProvider = source
+ * de vérité).
  *
  * - syncProviderSeedsToDb() : upsert des seeds (presets + test IdP) dans
  *   AuthProvider, champs sensibles chiffrés individuellement (clientSecret…).
@@ -46,7 +46,7 @@ export type ProviderDbRow = {
   name: string
   enabled: boolean
   config: Record<string, unknown>
-  /** B5B : null = provider global (disponible pour tous les tenants). */
+  /** null = provider global (disponible pour tous les tenants). */
   tenantId: string | null
 }
 

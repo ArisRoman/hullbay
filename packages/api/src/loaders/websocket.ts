@@ -16,7 +16,7 @@ import { DEFAULT_TENANT_ID } from "../modules/auth/identity/auth-identity.servic
  * - Rooms par tenant : `tenant:<id>` → les events système/opérations y sont diffusés.
  * - Stream de logs d'un conteneur à la demande (subscribe:logs).
  *
- * Phase 5B : isolation WS stricte — join/subscribe vérifient l'appartenance au
+ * Isolation WS stricte — join/subscribe vérifient l'appartenance au
  * tenant, le relai emit scope par tenant et projet (plus de io.emit global pour
  * les events métier).
  */
@@ -50,11 +50,11 @@ export function attachWebSocket(httpServer: HttpServer): SocketIOServer {
   })
 
   io.on("connection", (socket) => {
-    // Phase 5B : chaque socket rejoint la room de son tenant.
+    // Chaque socket rejoint la room de son tenant.
     void socket.join(`tenant:${socket.data.tenantId as string}`)
 
     // Rejoindre la room d'un projet (pour recevoir ses events live).
-    // Phase 5B : validation que le projet appartient bien au tenant du socket.
+    // Validation que le projet appartient bien au tenant du socket.
     socket.on("join:project", async (projectId: string) => {
       if (typeof projectId !== "string") return
       const tenantId = socket.data.tenantId as string
@@ -74,7 +74,7 @@ export function attachWebSocket(httpServer: HttpServer): SocketIOServer {
     })
 
     // Stream de logs d'un conteneur à la demande.
-    // Phase 5B : le cluster doit appartenir au tenant du socket.
+    // Le cluster doit appartenir au tenant du socket.
     let logStream: NodeJS.ReadableStream | null = null
     socket.on("subscribe:logs", async (payload: { clusterId: string; containerId: string }) => {
       if (typeof payload?.containerId !== "string" || typeof payload?.clusterId !== "string") return
@@ -106,7 +106,7 @@ export function attachWebSocket(httpServer: HttpServer): SocketIOServer {
     })
   })
 
-  // Phase 5B : relai des events ops → rooms scopées (tenant / projet uniquement).
+  // Relai des events ops → rooms scopées (tenant / projet uniquement).
   // Plus de io.emit() pour les events métier : chaque socket reçoit uniquement les
   // events de son tenant. Les events système globaux (updates, auth, user) restent
   // émis globalement car ils ne sont pas liés à un tenant spécifique.
@@ -139,7 +139,7 @@ export function attachWebSocket(httpServer: HttpServer): SocketIOServer {
 }
 
 /**
- * Phase 5B — résout le tenant d'un event infra qui ne porte pas tenantId, à
+ * Résout le tenant d'un event infra qui ne porte pas tenantId, à
  * partir de son clusterId ou serverId. Renvoie null pour les events réellement
  * système (aucun rattachement tenant).
  */

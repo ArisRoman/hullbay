@@ -1,8 +1,8 @@
 /**
  * Fabrique le bon adapter de protocole pour un enregistrement AuthProvider.
- * Phase 2 : local. Phase 3 : local + oidc + oauth2. Phase 4 : + saml.
+ * Kinds supportés : local, oidc, oauth2, saml, ldap (+ passkeys via webauthn).
  * `config` porte les paramètres du protocole (jamais de secrets en dur ici —
- * ils sont injectés via la config du provider, chiffrés au stockage dur Phase 5A).
+ * ils sont injectés via la config du provider, chiffrés au stockage).
  */
 
 import type { AuthProviderContract, ProviderKind } from "./types"

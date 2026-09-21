@@ -5,7 +5,7 @@ import { clusterService } from "../clusters/service"
 /**
  * Connexion à l'API Docker Engine.
  *
- * SÉCURITÉ (cf. plan, risque n°1) : le socket Docker donne un contrôle root
+ * SÉCURITÉ (risque majeur) : le socket Docker donne un contrôle root
  * effectif sur le VPS. En PROD on ne monte PAS le socket dans l'api : on passe
  * par un docker-socket-proxy (Tecnativa) qui filtre l'API Docker (autorise
  * SERVICES/NETWORKS/VOLUMES/TASKS/NODES/EVENTS/IMAGES, bloque EXEC + écritures

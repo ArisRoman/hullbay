@@ -113,7 +113,7 @@ export class DockerEngineService {
     authResolver?: AuthResolver,
     tenantId?: string,
   ): Promise<DockerEngineService> {
-    // Phase 5B : si un tenant est fourni, le cluster doit lui appartenir —
+    // Si un tenant est fourni, le cluster doit lui appartenir —
     // sinon l'appelant accède au daemon d'UN AUTRE tenant. Les appels système
     // (jobs globaux, workflows internes déjà scopés) ne le passent pas.
     if (tenantId) {
@@ -167,7 +167,7 @@ export class DockerEngineService {
       Version?: { Index?: number };
       Spec?: { Role?: string; Availability?: string };
     };
-    // Garde HA (A5) : interdire la rétrogradation du DERNIER manager — un Swarm
+    // Garde HA : interdire la rétrogradation du DERNIER manager — un Swarm
     // sans manager perd tout control plane (aucune façon de rejoindre/gérer).
     if (role === "worker" && info.Spec?.Role === "manager") {
       const { total } = await this.managerHealth();

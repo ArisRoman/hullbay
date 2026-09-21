@@ -1,7 +1,7 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 /**
- * Tests E2E du TenantSwitcher (Phase 5B §14).
+ * Tests E2E du TenantSwitcher.
  * L'API est stubée ; on simule un compte membre de deux tenants (owner sur
  * tenant-a, viewer sur tenant-b) et on vérifie que la bascule re-signe la
  * session (nouveau token), change le rôle affiché/navigation, et que les

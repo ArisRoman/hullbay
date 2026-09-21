@@ -1,5 +1,5 @@
 /**
- * Façade AuthService — conserve les signatures publiques exactes pour compatibilité §2.
+ * Façade AuthService — conserve les signatures publiques exactes (compat).
  * La logique métier a été déplacée dans core/auth-core.ts, providers/local,
  * session-manager et mfa/totp. Cette façade délègue tout en restant la surface
  * publique (imports des tests, websocket, routes).

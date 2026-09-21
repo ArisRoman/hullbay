@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Rotation des secrets chiffrés (Phase 5A1, §8 du plan) — idempotent.
+ * Rotation des secrets chiffrés — idempotent.
  *
  * Ré-chiffre progressivement, PAR ENREGISTREMENT et PAR CHAMP, les secrets des
  * scopes mfa et provider avec une NOUVELLE clé, sans down-time ni big-bang :

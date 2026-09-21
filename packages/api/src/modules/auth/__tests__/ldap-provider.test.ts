@@ -59,7 +59,7 @@ vi.mock("../secrets/secret-encryption-service", () => ({
 import { prisma } from "../../../lib/prisma"
 import { resolveIdentity } from "../core/identity-mapping"
 
-describe("LdapProvider (Phase 5A3 — LDAP / LDAPS)", () => {
+describe("LdapProvider (LDAP / LDAPS)", () => {
   const baseConfig = {
     id: "ldap-corp",
     name: "Enterprise LDAP",
@@ -224,7 +224,7 @@ describe("LdapProvider (Phase 5A3 — LDAP / LDAPS)", () => {
     ).rejects.toThrow(AuthError)
   })
 
-  it("propage IdentityPendingError si l'identité n'est pas encore approuvée (workflow 5A)", async () => {
+  it("propage IdentityPendingError si l'identité n'est pas encore approuvée", async () => {
     const provider = createLdapProvider(baseConfig)
     const guidBuf = Buffer.alloc(16, 0x33)
 

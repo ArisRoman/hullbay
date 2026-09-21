@@ -57,7 +57,7 @@ import { prisma } from "../../../lib/prisma"
 import { userHasMfaFactor } from "../core/auth-core"
 import { authService } from "../service"
 
-describe("LDAP & WebAuthn Routes (Phase 5A3)", () => {
+describe("LDAP & WebAuthn Routes", () => {
   let app: Awaited<ReturnType<typeof buildTestApp>>
 
   beforeEach(async () => {
@@ -196,7 +196,7 @@ describe("LDAP & WebAuthn Routes (Phase 5A3)", () => {
       expect(res.json().code).toBe("provider_not_found")
     })
 
-    it("retourne 403 identity_pending_approval si l'utilisateur est inconnu (workflow 5A)", async () => {
+    it("retourne 403 identity_pending_approval si l'utilisateur est inconnu (en attente d'approbation)", async () => {
       const mockProvider = {
         kind: "ldap",
         enabled: true,

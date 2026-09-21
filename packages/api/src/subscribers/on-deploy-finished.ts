@@ -37,7 +37,7 @@ const AUDITED: Record<string, string> = {
   "auth.ldap.failed": "auth.ldap.failed",
   "auth.webauthn.registered": "auth.webauthn.registered",
   "auth.webauthn.deleted": "auth.webauthn.deleted",
-  // Phase 5A1 — CRUD providers + approbation des identités externes.
+  // CRUD providers + approbation des identités externes.
   "auth.provider.created": "auth.provider.created",
   "auth.provider.updated": "auth.provider.updated",
   "auth.provider.deleted": "auth.provider.deleted",
@@ -61,7 +61,7 @@ export function registerDeploySubscribers(): void {
       // Affiner deploy success/failed.
       const finalAction =
         eventName === "deploy.finished" ? (d.ok ? "deploy.success" : "deploy.failed") : action
-      // Phase 5B : tenant de l'action. Explicite dans le payload si émis, sinon
+      // Tenant de l'action : explicite dans le payload si émis, sinon
       // résolu via les membreships de l'acteur ; événements systèmes → défaut.
       const tenantId =
         typeof d.tenantId === "string"

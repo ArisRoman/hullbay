@@ -1,5 +1,5 @@
 /**
- * Routes SAML publiques (Phase 4) : login + ACS + metadata.
+ * Routes SAML publiques : login + ACS + metadata.
  * GET /api/auth/saml/:id/login      → 302 vers l'IdP (AuthnRequest redirect)
  * POST /api/auth/saml/:id/acs       → traite la SAMLResponse (info)
  * GET /api/auth/saml/:id/metadata   → XML SP metadata (entity ID, ACS, certs)

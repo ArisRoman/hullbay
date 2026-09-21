@@ -24,7 +24,7 @@ const PUBLIC_PATHS = new Set([
 ])
 
 // Flux SSO (initiateLogin + callback) et LDAP : routes à préfixe dynamique.
-// Phase 3 : oidc/oauth2 (sso). Phase 4 : saml. Phase 5A3 : ldap.
+// Reconnaît oidc/oauth2 (sso), saml et ldap.
 const PUBLIC_PATH_PREFIXES = ["/api/auth/sso/", "/api/auth/saml/", "/api/auth/ldap/"]
 
 function isPublicPath(path: string): boolean {
@@ -71,7 +71,7 @@ export function registerAuthGuard(app: FastifyInstance) {
         tenantId?: string
       }
 
-      // Phase 5B : tenancy à la requête. Override cross-tenant via header : résolu
+      // Tenancy à la requête. Override cross-tenant via header : résolu
       // seulement si l'utilisateur a une membership dans ce tenant (fail-closed).
       const headerTenant = tenantFromHeader(req)
       if (headerTenant) {
@@ -98,7 +98,7 @@ export function registerAuthGuard(app: FastifyInstance) {
         })
       }
     } catch {
-      // Comportement Phase 1 : un pendingToken (audience mfa-pending) ou un token
+      // Un pendingToken (audience mfa-pending) ou un token
       // invalide est rejeté partout, y compris sur les routes de setup MFA. Les
       // routes MFA_SETUP acceptent exclusivement un token de session valide.
       return reply.code(401).send({ error: "token invalide" })

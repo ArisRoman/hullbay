@@ -17,7 +17,7 @@ export class ClusterService {
     });
   }
 
-  /** Phase 5B : tous les clusters, TOUS tenants (jobs d'arrière-plan globaux). */
+  /** Tous les clusters, TOUS tenants (jobs d'arrière-plan globaux). */
   listAll() {
     return prisma.cluster.findMany({ orderBy: { createdAt: "asc" } });
   }

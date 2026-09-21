@@ -1,8 +1,8 @@
 /**
- * Test unitaire SamlProvider (Phase 4 §16) — cycle complet SAML 2.0 :
+ * Test unitaire SamlProvider — cycle complet SAML 2.0 :
  * AuthnRequest (initiateLogin) + SAMLResponse (callback), validation
  * signature/issuer/audience/conditions/Destination/Recipient/InResponseTo,
- * anti-replay (empreinte + RelayState), et les 9 cas négatifs du plan.
+ * anti-replay (empreinte + RelayState), et les 9 cas négatifs.
  * AUCUN réseau (cacheProvider + fixtures de test injectés).
  */
 

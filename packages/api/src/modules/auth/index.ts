@@ -1,5 +1,5 @@
 /**
- * Barrel public du module auth — point d'entrée unique (§14 du plan).
+ * Barrel public du module auth — point d'entrée unique.
  * Tous les exports sont réexportés ici pour que les consommateurs puissent
  * importer depuis "./modules/auth" sans connaître l'arborescence interne.
  *

@@ -10,7 +10,7 @@
  *   User sans membership  →  membership(tenant-default, role = User.role)
  *   User avec membership  →  inchangé (jamais d'écrasement)
  *
- * À exécuter AVANT la montée des gardes fail-closed A1/A2 : une fois lancé, le
+ * À exécuter AVANT la montée des gardes fail-closed : une fois lancé, le
  * fallback `User.role` ne couvre plus que les comptes réellement orphelins
  * (cas dégradé), plus jamais le tenant par défaut entier.
  *

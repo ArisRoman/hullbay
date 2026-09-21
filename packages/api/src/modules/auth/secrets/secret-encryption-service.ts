@@ -1,9 +1,9 @@
 /**
  * SecretEncryptionService : chiffrement/déchiffrement AES-256-GCM séparé par
  * domaine (MFA / PROVIDER / SESSION) — clé indépendante par scope pour permettre
- * une rotation indépendante (§8 du plan).
+ * une rotation indépendante.
  *
- * Rotation (Phase 5A1) : re-chiffrement progressif PAR ENREGISTREMENT, sans
+ * Rotation : re-chiffrement progressif PAR ENREGISTREMENT, sans
  * down-time ni big-bang. Le payload chiffré porte une empreinte de clé
  * (fingerprint) `k<hex>:iv:tag:data` pour :
  *   - détecter les enregistrements déjà tournés (idempotence du script) ;
@@ -55,7 +55,7 @@ function keyFor(kind: SecretKind): Buffer {
 }
 
 /** Chiffre avec la clé courante (legacy `iv:tag:data`) ou une clé explicite
- *  (`k<fingerprint>:iv:tag:data` — rotation 5A1). */
+ *  (`k<fingerprint>:iv:tag:data` — rotation de clés). */
 function encrypt(kind: SecretKind, plain: string, keyHex?: string): string {
   const iv = randomBytes(12)
   const cipher = createCipheriv("aes-256-gcm", keyHex ? Buffer.from(keyHex, "hex") : keyFor(kind), iv)
@@ -189,7 +189,7 @@ export async function rotate(
   return result
 }
 
-// ── Façade compat (§8 du plan) ──
+// ── Façade compat ──
 // Les appels existants (auth/service, registry/service, lib/keys, lib/ssh-tunnel,
 // workflows) conservent leur interface d'origine. La clé utilisée reste celle du
 // scope "mfa" pour assurer la compatibilité descendante avec les données existantes.

@@ -1,5 +1,5 @@
 /**
- * Contrats partagés entre tous les providers et le cœur auth (§5.1 du plan).
+ * Contrats partagés entre tous les providers et le cœur auth.
  * Aucune dépendance Fastify ici : les callbacks reçoivent des types génériques
  * (FastifyRequest/FastifyReply au niveau impl).
  */
@@ -14,7 +14,7 @@ export interface ExternalIdentity {
   email?: string | null
   /** Vrai uniquement si l'IdP affirme l'email vérifié (OIDC `email_verified`,
    *  SSO-callback d'entrée). LDAP/OAuth2 = undefined → assimilé false.
-   *  GARDE B5 : un User existant n'est réutilisé qu'avec un email vérifié. */
+   *  GARDE : un User existant n'est réutilisé qu'avec un email vérifié. */
   emailVerified?: boolean
   name?: string
   groups?: string[]
@@ -38,7 +38,7 @@ export interface AuthResult {
   mfaRequired: boolean
   mfaPendingToken?: string
   // Résolution vers un User enregistré (POST mapping) : chaque provider doit
-  // exposer le userId + rôle effectif pour le signing de session (§5.1 du plan).
+  // exposer le userId + rôle effectif pour le signing de session.
   userId: string
   role: string
 }
@@ -61,7 +61,7 @@ export interface AuthProviderContract {
   getConfig(): ProviderPublicConfig
 }
 
-// ── Erreurs d'authentification partagées (§10 du plan) ──
+// ── Erreurs d'authentification partagées ──
 
 export type AuthErrorCode =
   | "invalid_credentials"
@@ -82,7 +82,7 @@ export class AuthError extends Error {
   /** UserId résolu quand un échec concerne un compte existant (audit corrélé). */
   userId?: string
   /** Cause machine d'un échec (ex. "account_disabled_or_locked"). Jamais
-   *  sérialisée vers le client : sert uniquement à l'audit (C4). */
+   *  sérialisée vers le client : sert uniquement à l'audit. */
   reason?: string
 
   constructor(code: AuthErrorCode, message: string, status = 400, reason?: string) {

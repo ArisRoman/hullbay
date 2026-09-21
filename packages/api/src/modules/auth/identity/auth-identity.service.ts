@@ -1,13 +1,13 @@
 /**
  * Service identité : helpers pour la création/lookup d'identités locales
- * et la résolution du tenant par défaut (§6, §4 du plan).
+ * et la résolution du tenant par défaut.
  */
 
 import { prisma } from "../../../lib/prisma"
 
 /**
- * Id littéral du tenant par défaut (créé par la migration Phase 2 — id fixe).
- * Référencé par le backfill 5B et le fallback d'isolation des données héritées.
+ * Id littéral du tenant par défaut (créé par la migration — id fixe).
+ * Référencé par le backfill tenant-scope et le fallback d'isolation des données héritées.
  */
 export const DEFAULT_TENANT_ID = "tenant-default"
 
@@ -54,7 +54,7 @@ export async function assertUserInTenant(userId: string, tenantId: string): Prom
 export type ResolvedRole = "owner" | "operator" | "viewer"
 
 /**
- * Rôle effectif de l'utilisateur (Phase 5B §13) : résolu depuis SA membership
+ * Rôle effectif de l'utilisateur : résolu depuis SA membership
  * dans le tenant courant — le miroir `User.role` n'est plus la source de
  * vérité (fallback legacy pour les comptes sans membership / mocks).
  * le fallback cross-tenant (findFirst sur n'IMPORTE quelle

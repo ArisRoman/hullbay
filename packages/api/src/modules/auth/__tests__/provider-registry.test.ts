@@ -49,7 +49,7 @@ describe("ProviderRegistry", () => {
     expect(registry.list()).toHaveLength(0);
   });
 
-  it("registerSeeds n'enregistre que les presets activés (Phase 2 : local)", () => {
+  it("registerSeeds n'enregistre que les presets activés", () => {
     registry.registerSeeds();
     const ids = registry.list().map((p) => p.id);
     const enabledSeeds = PROVIDER_SEEDS.filter((s) => s.enabled).map((s) => s.id);

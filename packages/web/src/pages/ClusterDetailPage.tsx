@@ -336,7 +336,7 @@ export function ClusterDetailPage() {
                             : []),
                           ...(srv.swarmNodeId &&
                           srv.role === "manager" &&
-                          // Garde A5 : on masque "Rétrograder" sur le DERNIER
+                          // Garde : on masque "Rétrograder" sur le DERNIER
                           // manager — la rétrogradation est bloquée en back
                           // (409 LastManagerError), inutile de la proposer en UI.
                           managersTotal > 1

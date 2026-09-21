@@ -17,7 +17,7 @@ export const AUTH_AUDIT_EVENTS = {
   ldapFailed: "auth.ldap.failed",
   webauthnRegistered: "auth.webauthn.registered",
   webauthnDeleted: "auth.webauthn.deleted",
-  // Phase 5A1 — CRUD providers + workflow approbation.
+  // CRUD providers + workflow approbation.
   providerCreated: "auth.provider.created",
   providerUpdated: "auth.provider.updated",
   providerDeleted: "auth.provider.deleted",

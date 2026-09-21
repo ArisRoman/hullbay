@@ -1,7 +1,7 @@
 /**
- * Provider LDAP / LDAPS (Phase 5A3, N°2 du plan).
+ * Provider LDAP / LDAPS.
  *
- * Modèle d'exécution propre (§17.4) :
+ * Modèle d'exécution propre :
  * 1. Bind service account (si configuré)
  * 2. Search utilisateur (searchFilter sur base DN)
  * 3. Récupération des attributs + vérification compte désactivé (UAC)
@@ -417,7 +417,7 @@ export class LdapProvider implements AuthProviderContract {
       const externalIdentity: ExternalIdentity = {
         providerId: this.id,
         kind: "ldap",
-        issuer: null, // NULL pour ldap (§5.1)
+        issuer: null, // NULL pour ldap
         subject: stableSubject,
         email,
         name,

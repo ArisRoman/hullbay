@@ -237,7 +237,7 @@ export const api = {
   deleteUser: (id: string) =>
     req<{ ok: true }>(`/api/users/${id}`, { method: "DELETE" }),
 
-  // Providers d'authentification + approbations (owner uniquement), Phase 5A1.
+  // Providers d'authentification + approbations (owner uniquement).
   listAdminProviders: () => req<AuthProviderAdmin[]>("/api/auth/admin/providers"),
   createAdminProvider: (data: AuthProviderUpsert) =>
     req<AuthProviderAdmin>("/api/auth/admin/providers", {
@@ -498,14 +498,14 @@ export const api = {
 
 export type Environment = "development" | "test" | "production";
 
-/** Tenants accessibles au compte (membreships) — phase 5B, alimente le switcher. */
+/** Tenants accessibles au compte (membreships) ; alimente le switcher. */
 export type MemberTenant = {
   tenantId: string;
   role: "owner" | "operator" | "viewer";
   tenant: { slug: string };
 };
 
-/** Profil exposé par GET /api/auth/me (phase 5B : le rôle suit le tenant actif de session). */
+/** Profil exposé par GET /api/auth/me : le rôle suit le tenant actif de session. */
 export type Me = {
   id: string;
   email: string;

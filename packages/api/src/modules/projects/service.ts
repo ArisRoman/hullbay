@@ -53,7 +53,7 @@ export class ProjectsService {
   async createProject(input: { name: string; description?: string; clusterId?: string; tenantId?: string }) {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID
     const slug = `${slugify(input.name) || "projet"}-${randomBytes(2).toString("hex")}`
-    // Phase 5B : si un cluster est fourni, il DOIT appartenir au tenant —
+    // Si un cluster est fourni, il DOIT appartenir au tenant —
     // sinon le projet serait créé sur le cluster d'un AUTRE tenant (fuite d'IDs).
     let targetClusterId = input.clusterId
     if (targetClusterId) {

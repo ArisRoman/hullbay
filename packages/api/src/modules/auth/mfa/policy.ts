@@ -1,9 +1,9 @@
 /**
- * Politique MFA (Phase 2 : stub local → Phase 5A1 : effectif sur le rôle).
- * Règle du plan §10 : une MFA fournie par l'IdP SSO ne doit PAS imposer une 2e MFA
- * locale, SAUF si SecurityPolicy.mfaRequireRoles l'exige (rôle concerné).
- * En 5A2, la politique est persistée par tenant (modèle SecurityPolicy) — le
- * singleton lit l'env jusqu'à ce que le chargement tenant soit branché.
+ * Politique MFA, effective sur le rôle.
+ * Une MFA fournie par l'IdP SSO ne doit PAS imposer une 2e MFA locale, SAUF si
+ * SecurityPolicy.mfaRequireRoles l'exige (rôle concerné). La politique est
+ * persistée par tenant (modèle SecurityPolicy), lue depuis la DB et
+ * mise en cache par tenant.
  */
 
 import { securityPolicy } from "../policies/security-policy.service"
@@ -17,7 +17,7 @@ export interface MfaDecision {
 export function shouldRequireLocalMfa(input: {
   providerKind: string
   role?: string
-  /** Tenant effectif (C2/VÉRIF FINALE) : la politique MFA se lit par tenant,
+  /** Tenant effectif : la politique MFA se lit par tenant,
    *  pas sur le singleton par défaut. Login SSO sans contexte tenant → défaut. */
   tenantId?: string
 }): MfaDecision {

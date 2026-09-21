@@ -8,7 +8,7 @@ import { prisma } from "../../../lib/prisma"
 import { providerRegistry } from "../registry/provider-registry"
 
 /**
- * Phase 5A1 — CRUD providers + workflow d'approbation (owner).
+ * CRUD providers + workflow d'approbation (owner).
  *
  * SÉCURITÉ couverte :
  * - jamais de secret en clair en réponse (champs sensibles masqués par marqueur)
@@ -268,7 +268,7 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
     await app.close()
   })
 
-  it("GET — liste restreinte au tenant effectif (B5B) : tenant courant + globaux", async () => {
+  it("GET — liste restreinte au tenant effectif : tenant courant + globaux", async () => {
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     const app = await buildApp()
     await app.inject({ method: "GET", url: "/api/auth/admin/providers" })
@@ -279,7 +279,7 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
     await app.close()
   })
 
-  it("PUT — provider d'un AUTRE tenant → 404 (isolation B5B, anti-fuite cross-tenant)", async () => {
+  it("PUT — provider d'un AUTRE tenant → 404 (anti-fuite cross-tenant)", async () => {
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
       id: "oidc-other", kind: "oidc", name: "Other", enabled: true, tenantId: "tenant-other",
       config: { issuer: "https://idp.example.org", clientId: "c" },
@@ -361,8 +361,8 @@ describe("Workflow d'approbation (owner)", () => {
     await app.close()
   })
 
-  it("approve — compte existant + email NON vérifié → 409 (garde B5), identité jamais liée", async () => {
-    vi.mocked(prisma.pendingIdentity.findFirst).mockResolvedValue({ ...PENDING_ALICE, id: "pending-b5a", emailVerified: false } as never)
+  it("approve — compte existant + email NON vérifié → 409, identité jamais liée", async () => {
+    vi.mocked(prisma.pendingIdentity.findFirst).mockResolvedValue({ ...PENDING_ALICE, id: "pending-1", emailVerified: false } as never)
     vi.mocked(prisma.tenant.findUnique).mockResolvedValue({ id: "t-1", name: "Default" } as never)
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ id: "oidc-test", kind: "oidc" } as never)
     const tx = txMock()
@@ -371,7 +371,7 @@ describe("Workflow d'approbation (owner)", () => {
     const app = await buildApp()
     const res = await app.inject({
       method: "POST",
-      url: "/api/auth/admin/pendings/pending-b5a/approve",
+      url: "/api/auth/admin/pendings/pending-1/approve",
       payload: { tenantId: "t-1", role: "viewer" },
     })
     expect(res.statusCode).toBe(409)
@@ -381,8 +381,8 @@ describe("Workflow d'approbation (owner)", () => {
     await app.close()
   })
 
-  it("approve — compte existant + email VÉRIFIÉ → réutilise le User (B5), ne le recrée pas", async () => {
-    vi.mocked(prisma.pendingIdentity.findFirst).mockResolvedValue({ ...PENDING_ALICE, id: "pending-b5b", emailVerified: true } as never)
+  it("approve — compte existant + email VÉRIFIÉ → réutilise le User, ne le recrée pas", async () => {
+    vi.mocked(prisma.pendingIdentity.findFirst).mockResolvedValue({ ...PENDING_ALICE, id: "pending-2", emailVerified: true } as never)
     vi.mocked(prisma.tenant.findUnique).mockResolvedValue({ id: "t-1", name: "Default" } as never)
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ id: "oidc-test", kind: "oidc" } as never)
     const tx = txMock()
@@ -391,7 +391,7 @@ describe("Workflow d'approbation (owner)", () => {
     const app = await buildApp()
     const res = await app.inject({
       method: "POST",
-      url: "/api/auth/admin/pendings/pending-b5b/approve",
+      url: "/api/auth/admin/pendings/pending-2/approve",
       payload: { tenantId: "t-1", role: "viewer" },
     })
     expect(res.statusCode).toBe(200)

@@ -1,6 +1,6 @@
 /**
  * Routes d'administration des providers d'authentification (owner uniquement).
- * Phase 5A1 : AuthProvider = source de vérité (§4.2 §8 du plan).
+ * AuthProvider = source de vérité.
  *
  * SÉCURITÉ :
  * - jamais de secret renvoyé : la liste masque les champs sensibles (marqueur
@@ -125,7 +125,7 @@ function dto(row: {
     kind: row.kind,
     name: row.name,
     enabled: row.enabled,
-    // B5B : tenantId = null ⇒ provider global (disponible pour tous les tenants).
+    // tenantId = null ⇒ provider global (disponible pour tous les tenants).
     tenantId: row.tenantId ?? null,
     config: maskConfig((row.config as Record<string, unknown>) ?? {}, row.kind),
   }
@@ -144,7 +144,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      // B5B : liste filtrée par tenant effectif — providers du tenant courant
+      // Liste filtrée par tenant effectif — providers du tenant courant
       // + providers globaux (tenantId null). Jamais ceux d'un autre tenant.
       const tenantId = reqTenant(req)
       const rows = await prisma.authProvider.findMany({
@@ -237,7 +237,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const row = await prisma.authProvider.findUnique({ where: { id } })
       if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
 
-      // Isolation tenant (B5B) : un tenant ne voit ni ne modifie les providers
+      // Isolation tenant : un tenant ne voit ni ne modifie les providers
       // d'un autre tenant. Les providers globaux (tenantId null) ne sont
       // mutables que depuis le tenant défaut.
       const tenantId = reqTenant(req)

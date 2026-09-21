@@ -61,7 +61,7 @@ vi.mock("../../../lib/event-bus", () => ({
 
 import { prisma } from "../../../lib/prisma"
 
-describe("WebAuthn / Passkeys Factor (Phase 5A3, N°11)", () => {
+describe("WebAuthn / Passkeys Factor", () => {
   const userId = "u-alice"
   const mockIdentity = {
     id: "id-local-1",

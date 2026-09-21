@@ -1,5 +1,5 @@
 /**
- * Provider OIDC générique (§15, Phase 3).
+ * Provider OIDC générique.
  *
  * UN SEUL adapter pour TOUS les émetteurs OIDC (Keycloak, Google, Okta…) :
  * aucune logique `if(provider===…)`, aucun id vendor en dur. La validation
@@ -15,8 +15,8 @@
  * - discovery : `issuer` document == issuer configuré (sinon refus)
  *
  * Le flux redirect n'a pas d'`authenticate()` : la méthode est implémentée
- * pour respecter AuthProviderContract (§5.1) mais lève systématiquement —
- * le chemin réel est initiateLogin → callback (§15.7/15.9 du plan).
+ * pour respecter AuthProviderContract mais lève systématiquement —
+ * le chemin réel est initiateLogin → callback.
  */
 
 import jwt from "jsonwebtoken"
@@ -50,7 +50,7 @@ export interface OidcProviderOptions {
   discoveryUrl?: string
   /** JWKS URI en surcharge (tests/fixtures). Sinon celle du discovery. */
   jwksUri?: string
-  /** Tolérance d'horloge entre ce SP et l'IdP, ms (C8). Défaut 30000 ms —
+  /** Tolérance d'horloge entre ce SP et l'IdP, ms. Défaut 30000 ms —
    *  évite les faux négatifs si l'horloge de l'IdP dérive de quelques secondes. */
   acceptedClockSkewMs?: number
   /** fetch injectable (tests fixtures) ; défaut = fetch global. */
@@ -121,7 +121,7 @@ export class OidcProvider implements AuthProviderContract {
   }
 
   /**
-   * initiateLogin (§15.7) : discovery fail-closed, PKCE + state + nonce stockés,
+   * initiateLogin : discovery fail-closed, PKCE + state + nonce stockés,
    * redirige vers authorization_endpoint. Ne crée JAMAIS d'identité.
    */
   async initiateLogin(req: unknown, _reply: unknown): Promise<void> {
@@ -157,7 +157,7 @@ export class OidcProvider implements AuthProviderContract {
   }
 
   /**
-   * callback (§15.9) : consomme state (anti-replay), échange code→tokens PKCE,
+   * callback : consomme state (anti-replay), échange code→tokens PKCE,
    * valide l'id_token (iss=issuer attendu, aud=clientId, exp, signature RS256
    * via JWKS apparié par kid, nonce) puis retourne l'identité externe.
    * La résolution ExternalIdentity → User/Pending est faite par sso-callback

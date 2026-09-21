@@ -1,10 +1,10 @@
 /**
- * Phase 5B — tenancy : résolution du tenant courant par requête (§4.2 du plan).
+ * Tenancy : résolution du tenant courant par requête.
  *
  * Source du tenant (priorité décroissante) :
  *   1. Header `x-tenant-id` (override admin cross-tenant, validé en guard).
  *   2. Claim `tenantId` du token de session (panel attaché à la signature).
- *   3. Fallback : tenant par défaut (données héritées pré-5B).
+ *   3. Fallback : tenant par défaut (données héritées).
  */
 
 import type { FastifyRequest } from "fastify"

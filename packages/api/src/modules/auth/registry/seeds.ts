@@ -1,12 +1,12 @@
 /**
- * Seeds du Provider Registry : configurations de base (Phase 2/3).
+ * Seeds du Provider Registry : configurations de base.
  * Aucun fournisseur commercial privilégié — local est un provider comme les autres.
- * Les presets oidc/oauth2/saml/ldap sont désactivés (implémentation Phase 3/4/5A).
- * Aucune clé vendor par défaut (correctif N°4, N°7 du plan).
+ * Les presets oidc/oauth2/saml/ldap sont désactivés par défaut.
+ * Aucune clé vendor par défaut.
  *
  * Test IdP (Keycloak) : JAMAIS un défaut. Il n'est enregistré QUE si les
  * variables d'env de test sont présentes (e2e/CI) — une simple configuration,
- * pas un pilier du modèle (correction N°7).
+ * pas un pilier du modèle.
  */
 
 import type { ProviderKind } from "../providers/types"
@@ -22,10 +22,10 @@ export interface ProviderSeed {
 }
 
 /**
- * Champs sensibles chiffrés individuellement dans AuthProvider.config (§8 du plan).
- * Par kind : oidc/oauth2 → clientSecret ; SAML → aucun secret (idpCert public, §4).
+ * Champs sensibles chiffrés individuellement dans AuthProvider.config.
+ * Par kind : oidc/oauth2 → clientSecret ; SAML → aucun secret (idpCert public).
  * La clé privée SP SAML (signature AuthnRequest), si ajoutée, sera chiffrée ici →
- * scope "provider" (rotation 5A1-D).
+ * scope "provider" (rotation de clés).
  */
 export const SENSITIVE_FIELDS_BY_KIND: Record<ProviderKind, string[]> = {
   local: [],

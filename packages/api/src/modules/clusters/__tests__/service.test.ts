@@ -274,7 +274,7 @@ describe("ClusterService.createPending", () => {
   });
 });
 
-describe("ClusterService.markFailed (B4)", () => {
+describe("ClusterService.markFailed", () => {
   let service: ClusterService;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
@@ -301,7 +301,7 @@ describe("ClusterService.markFailed (B4)", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("ne gobe plus l'échec DB (B4) : log + rethrow, pas d'emit erroné", async () => {
+  it("ne gobe plus l'échec DB : log + rethrow, pas d'emit erroné", async () => {
     mockPrisma.cluster.update.mockRejectedValue(new Error("DB down"));
     mockEventBus.emit.mockResolvedValue(true);
 

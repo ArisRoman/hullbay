@@ -22,7 +22,7 @@ const operator = { preHandler: requireRole("operator") }
 const owner = { preHandler: requireRole("owner") }
 
 /**
- * Phase 5B — isolation par tenant : un projet d'un autre tenant est traité
+ * Isolation par tenant : un projet d'un autre tenant est traité
  * comme inexistant (404), jamais comme une ressource visible sans permission.
  * Type guard : `graph` est non-null APRÈS le test (narrowing TS).
  */
@@ -307,7 +307,7 @@ export async function registerReconcilerRoutes(app: FastifyInstance) {
     async (req) => {
       const tenantId = (req as TenantScopedRequest).tenantId
       const clusters = await prisma.cluster.findMany({ where: { tenantId }, select: { id: true, status: true } })
-      // Garde (A1) : ne reconstruire que sur des clusters prêts ; un cluster
+      // Garde : ne reconstruire que sur des clusters prêts ; un cluster
       // pending/failed ne doit pas servir de base de reconstruction.
       const candidates = clusters.filter((c) => c.status === "ready")
       const skippedUnready = clusters.length - candidates.length

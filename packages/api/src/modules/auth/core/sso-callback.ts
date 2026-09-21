@@ -1,12 +1,12 @@
 /**
- * Traitement d'un callback SSO (OIDC/OAuth2, puis SAML en Phase 4) :
- * ExternalIdentity → identity-mapping → session OU pending (§3, §6 du plan).
+ * Traitement d'un callback SSO (OIDC/OAuth2, SAML, LDAP) :
+ * ExternalIdentity → identity-mapping → session OU pending.
  *
  * - Identité connue → session signée (mfaEnabled=true : MFA gérée par l'IdP,
- *   pas de 2e MFA locale par défaut — §10), lastLoginAt mis à jour.
+ *   pas de 2e MFA locale par défaut), lastLoginAt mis à jour.
  * - Identité inconnue → PendingIdentity créée par resolveIdentity (jamais de
  *   User en auto) ; on retourne un résultat "pending" pour que la route laisse
- *   le front annoncer l'attente d'approbation. Workflow d'approbation = 5A.
+ *   le front annoncer l'attente d'approbation.
  */
 
 import { prisma } from "../../../lib/prisma"
@@ -72,7 +72,7 @@ export async function processSsoCallback(identity: ExternalIdentity): Promise<Ss
     })
     .catch(() => {})
 
-  // MFA locale : par défaut NON exigée après un SSO validé par l'IdP (§10).
+  // MFA locale : par défaut NON exigée après un SSO validé par l'IdP.
   const tenantId = await resolveTenantIdForUser(user.id)
   const role = await resolveRoleForUser(user.id, tenantId, user.role)
   const token = sessionManager.signSession(user.id, role, true, identity.providerId ?? "local", tenantId)

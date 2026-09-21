@@ -119,7 +119,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const tenantId = (req as TenantScopedRequest).tenantId
-    // Isolation 5B : le projet cible doit appartenir au tenant de la requête.
+    // Isolation : le projet cible doit appartenir au tenant de la requête.
     if (!(await projectsService.getProjectGraph(id, tenantId)))
       return reply.code(404).send({ error: "project not found" })
     try {
@@ -190,7 +190,7 @@ export async function registerProjectRoutes(app: FastifyInstance) {
   }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const tenantId = (req as TenantScopedRequest).tenantId
-    // Isolation 5B : le projet cible doit appartenir au tenant de la requête.
+    // Isolation : le projet cible doit appartenir au tenant de la requête.
     if (!(await projectsService.getProjectGraph(id, tenantId)))
       return reply.code(404).send({ error: "project not found" })
     try {

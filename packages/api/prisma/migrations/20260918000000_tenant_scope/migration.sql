@@ -1,7 +1,7 @@
--- Phase 5B — tenant-scoping (expand) : colonnes tenantId + contraintes.
+-- Tenant-scoping (expand) : colonnes tenantId + contraintes.
 -- Stratégie expand/contract : colonnes NULLABLE en transition, backfill immédiat
--- vers le tenant par défaut ('tenant-default', créé en migration Phase 2), puis
--- NOT NULL en fin de phase 5B. Aucune donnée perdue.
+-- vers le tenant par défaut ('tenant-default', créé avec le modèle identité), puis
+-- NOT NULL à l'étape éteinte. Aucune donnée perdue.
 
 -- 0. Garantir le tenant par défaut (idempotent).
 INSERT INTO "Tenant" ("id", "name", "slug", "createdAt", "updatedAt")

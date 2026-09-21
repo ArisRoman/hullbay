@@ -1,5 +1,5 @@
 /**
- * Phase 5B — Isolation multi-tenant (matrix) : un utilisateur ne voit et ne
+ * Isolation multi-tenant (matrix) : un utilisateur ne voit et ne
  * modifie QUE les ressources de son tenant.
  *
  * Deux tenants fictifs : tenant-a / tenant-b. Le token émet le claim tenantId ;
@@ -149,7 +149,7 @@ function token(tenantId: string, role = "operator") {
   }))
 }
 
-describe("Phase 5B — isolation multi-tenant", () => {
+describe("Isolation multi-tenant (matrix)", () => {
   let app: Awaited<ReturnType<typeof buildTestApp>>
 
   beforeAll(async () => {

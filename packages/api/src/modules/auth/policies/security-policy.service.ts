@@ -60,7 +60,7 @@ export class SecurityPolicyService {
 
   constructor() {
     if (!prisma.securityPolicy) return
-    // Phase 5B : une policy PAR tenant (id fixe remplacé par `tenantId` unique).
+    // Une policy PAR tenant (id fixe remplacé par `tenantId` unique).
     // Rétrocompat : la ligne singleton existante est rattachée au tenant par défaut
     // (backfill migration) ; on l'utilise pour amorcer la policy par défaut.
     prisma.securityPolicy.findUnique({ where: { tenantId: DEFAULT_TENANT_ID } })

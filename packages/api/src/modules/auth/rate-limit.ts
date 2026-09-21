@@ -8,9 +8,9 @@
  * existant d'un compte inexistant (anti-énumération).
  *
  * Persistance en mémoire process-local — seuils configurés par la politique de
- * sécurité (5A1 : env ; 5A2 : par tenant). `clear()` sert aux tests.
+ * sécurité du tenant (relue à chaque appel). `clear()` sert aux tests.
  *
- * C2 — CONTRAINTE DE DÉPLOIEMENT : buckets process-local. En multi-instance, le
+ * CONTRAINTE DE DÉPLOIEMENT : buckets process-local. En multi-instance, le
  * compteur d'échecs est par instance (répartition des tentatives) ; un attaquant
  * distribué peut diviser le budget. Single-instance requis pour une anti-force
  * stricte ; en cluster, compléter par une cage au niveau du proxy/edge.
@@ -34,8 +34,8 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   maxBackoffMs: 600_000,
 }
 
-/** Config initiale depuis la politique de sécurité (env en 5A1, tenant en 5A2).
- *  Le tenant est relu par appel (B2 : seuils par tenant) — `getPolicyCached`
+/** Config depuis la politique de sécurité du tenant, relue à chaque appel.
+ *  Le tenant est relu par appel (seuils par tenant) — `getPolicyCached`
  *  synchronise le cache tenant, pas seulement le défaut. */
 function configFromPolicy(tenantId?: string): RateLimitConfig {
   const p = securityPolicy.getPolicyCached(tenantId ?? DEFAULT_TENANT_ID)
@@ -64,7 +64,7 @@ export class CompositeRateLimiter {
 
   /**
    * `config` peut être un objet statique (tests) ou un provider relu à chaque
-   * appel — indispensable pour que les changements de politique (5A2, par
+   * appel — indispensable pour que les changements de politique (par
    * tenant) s'appliquent sans redémarrage. Le provider prend le tenantId
    * effectif de la requête (seuils par tenant, B2).
    */
@@ -155,7 +155,7 @@ export class CompositeRateLimiter {
 export const authRateLimiter = new CompositeRateLimiter(configFromPolicy)
 
 /**
- * Tenant à engager dans la clé de rate-limit (B1) : post-auth → tenant de session
+ * Tenant à engager dans la clé de rate-limit : post-auth → tenant de session
  * (claim) sinon tenant de requête ; pré-auth (login, bootstrap) → aucun contexte,
  * tenant par défaut. Isole les buckets par tenant — un compte du tenant A ne
  * sature pas le bucket du même compte/email au tenant B.

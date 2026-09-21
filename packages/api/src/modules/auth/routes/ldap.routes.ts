@@ -1,5 +1,5 @@
 /**
- * Routes d'authentification LDAP / LDAPS (Phase 5A3).
+ * Routes d'authentification LDAP / LDAPS.
  */
 
 import type { FastifyInstance, FastifyReply } from "fastify"

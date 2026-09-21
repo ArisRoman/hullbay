@@ -16,7 +16,7 @@ import { prisma } from '../../lib/prisma';
  * redemarrage de Caddy
  */
 
-// Phase 5B : un domaine systeme PAR tenant. Les Ids de route sont suffixés du
+// Un domaine systeme PAR tenant. Les Ids de route sont suffixés du
 // tenantId pour que deux tenants ne se battent pas sur les mêmes routes Caddy
 // (sinon le dernier `setDomain` supprimait/écrasait les routes de l'autre).
 const API_ROUTE_PREFIX = "hullbay-system-api"

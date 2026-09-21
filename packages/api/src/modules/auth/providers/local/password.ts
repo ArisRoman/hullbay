@@ -1,5 +1,5 @@
 /**
- * Hash/verification scrypt du mot de passe (déplacé depuis service.ts, §8 du plan).
+ * Hash/verification scrypt du mot de passe (déplacé depuis service.ts).
  * Règle : un hash factice (DUMMY_HASH) est vérifié quand l'email n'existe pas, pour
  * égaliser le coût de hachage et empêcher l'énumération par timing.
  */

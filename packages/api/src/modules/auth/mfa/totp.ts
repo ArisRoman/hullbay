@@ -1,7 +1,7 @@
 /**
  * Opérations TOTP (déplacées depuis service.ts) — generateSecret, generateURI, verify.
  * Fonctionnellement identique à l'ancien code (otplib v13), isolé du reste du service
- * pour permettre des tests unitaires purs de ce facteur (§10 du plan).
+ * pour permettre des tests unitaires purs de ce facteur.
  */
 
 import { generateSecret as otplibGenerateSecret, generateURI, verify } from "otplib"

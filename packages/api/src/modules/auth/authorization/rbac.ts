@@ -1,7 +1,6 @@
 /**
  * RBAC — autorisation par rôle (déplacé depuis modules/auth/rbac.ts).
- * Phase 2 : rôle résolu depuis User.role (MIRROR temporaire). Phase 5B :
- * résolution via Membership(tenant courant).role (§13 du plan).
+ * Rôle résolu via la Membership du tenant courant, repli legacy `User.role`.
  *
  * Rôles : owner (tout) > operator (projets + deploy/destroy) > viewer (lecture).
  */
@@ -28,7 +27,7 @@ export function requireRole(min: Role) {
     if (!user) return reply.code(401).send({ error: "non authentifié" })
 
     let role = user.role
-    // Privilège cross-tenant (Phase 5B) : si un header resolv un AUTRE tenant que
+    // Privilège cross-tenant : si un header résout un AUTRE tenant que
     // celui du token, le rôle signé ne vaut pas là-bas → on résout la membership
     // du tenant cible, sinon un owner tenant-A passerait owner partout (tenancy
     // fantôme). Même tenant → le claim signé (issu de membership au sign) est fiable.
@@ -42,7 +41,7 @@ export function requireRole(min: Role) {
     }
 
     // Fail-closed : un rôle hors enum (RANK[role] === undefined) est traité au
-    // rang le plus bas. `UNKNOWN_ROLE_RANK` est BEU - pas `undefined < min` qui
+    // rang le plus bas. `UNKNOWN_ROLE_RANK` est numérique — pas `undefined < min` qui
     // serait évalué `false` et laisserait passer un rôle inconnu (fail-open).
     const rank = RANK[role] ?? UNKNOWN_ROLE_RANK
     if (rank < RANK[min]) {

@@ -1,4 +1,4 @@
--- Phase 2 — modèle identité (AuthIdentity/Tenant/Membership/AuthProvider/PendingIdentity).
+-- Modèle identité (AuthIdentity/Tenant/Membership/AuthProvider/PendingIdentity).
 -- ORDRE SÛR : on copie d'abord les credentials existants (User.passwordHash/mfaSecretEnc/
 -- mfaEnabled) dans auth_identities, puis on supprime les anciennes colonnes. Les comptes
 -- existants restent valides : hash conservés, aucun mot de passe régénéré.

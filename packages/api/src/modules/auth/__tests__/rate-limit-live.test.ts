@@ -27,7 +27,7 @@ describe("CompositeRateLimiter — config dynamique", () => {
     expect(limiter.check("k").blocked).toBe(true)
   })
 
-  it("transmet le tenant effectif au provider de config (seuils par tenant, VÉRIF FINALE)", () => {
+  it("transmet le tenant effectif au provider de config (seuils par tenant)", () => {
     const seen: (string | undefined)[] = []
     const limiter = new CompositeRateLimiter((tenantId) => {
       seen.push(tenantId)

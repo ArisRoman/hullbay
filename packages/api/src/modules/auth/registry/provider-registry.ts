@@ -1,8 +1,7 @@
 /**
  * Provider Registry : registre central des providers configurés.
- * Phase 2-4 : init mémoire depuis les seeds (registerSeeds). Phase 5A1 : la
- * source de vérité devient AuthProvider (registre hydraté au boot depuis la DB
- * via loadFromDb, sync seeds → DB dans provider-db.ts).
+ * Source de vérité : AuthProvider (registre hydraté au boot depuis la DB via
+ * loadFromDb, sync seeds → DB dans provider-db.ts).
  */
 
 import { createProvider } from "../providers/protocol-adapter"
@@ -60,7 +59,7 @@ export class ProviderRegistry {
   }
 
   /**
-   * Hydrate le registre depuis AuthProvider (Phase 5A1) : lit les rows, déchiffre
+   * Hydrate le registre depuis AuthProvider : lit les rows, déchiffre
    * les champs sensibles par kind, injecte `enabled` (présent dans les options
    * des adapters mais pas dans la config stockée), puis (re)crée les adapters.
    * Nécessite une DB joignable — appelée au boot (skipSideEffects=false) et
@@ -70,7 +69,7 @@ export class ProviderRegistry {
     const rows = await loadProviderRows()
     const next = new Map<string, AuthProviderContract>()
     for (const row of rows) {
-      // B5B-2 : le registre n'expose que les providers globaux (tenantId null,
+      // Le registre n'expose que les providers globaux (tenantId null,
       // partagés par tous les tenants) et ceux du tenant défaut. Les providers
       // d'un autre tenant ne doivent jamais être résolvables ici — sinon un
       // login SSO d'un tenant voisin fuirait dans le registre partagé.
@@ -99,6 +98,6 @@ export class ProviderRegistry {
 
 export const providerRegistry = new ProviderRegistry()
 
-// Initialisation au chargement du module — seuls les providers activés sont
-// enregistrés (Phase 2 : local uniquement).
+// Initialisation au chargement du module : seuls les providers activés sont
+// enregistrés (local + presets activés).
 providerRegistry.registerSeeds()

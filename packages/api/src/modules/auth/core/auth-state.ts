@@ -1,9 +1,8 @@
 /**
- * Auth State Stores (nonce / state / PKCE) — stubs Phase 2.
- * Utilisés en Phase 3 (OIDC/OAuth2) et Phase 4 (SAML RelayState).
- * En Phase 2 seule la logique locale fonctionne, ces stores restent inutilisés.
+ * Auth State Stores — nonce / state / PKCE / RelayState, consommation unique
+ * (anti-replay) et TTL : utilisés par OIDC, OAuth2 et SAML.
  *
- * C2 — CONTRAINTE DE DÉPLOIEMENT : ces stores sont process-local (Map mémoire).
+ * CONTRAINTE DE DÉPLOIEMENT : ces stores sont process-local (Map mémoire).
  * En multi-instance, un flux SSO initié sur l'instance A et callbacké vers
  * l'instance B ne retrouverait pas son state/nonce/PKCE. La session (UserSession)
  * reste elle couverte par Redis (user-session.store). Exigence : pour exploiter
@@ -49,7 +48,7 @@ export const nonceStore = new AuthStateStore<string>()
 export const stateStore = new AuthStateStore<{ redirectUri: string }>()
 export const pkceStore = new AuthStateStore<{ codeVerifier: string; redirectUri: string }>()
 
-// ── Stores SSO (Phase 3) : state/pkce avec TTL 10 min, consommation unique ──
+// ── Stores SSO : state/pkce avec TTL 10 min, consommation unique ──
 export interface OidcStateRecord {
   providerId: string
   redirectUri: string
@@ -62,7 +61,7 @@ export interface Oauth2StateRecord {
   redirectUri: string
 }
 
-// ── Store SSO (Phase 4) : RelayState SAML, consommation unique ──
+// ── Store SSO : RelayState SAML, consommation unique ──
 export interface SamlStateRecord {
   providerId: string
   redirectUri: string

@@ -130,7 +130,7 @@ function draftFrom(provider: AuthProviderAdmin): Draft {
 }
 
 /**
- * Page d'administration de l'authentification (owner uniquement) — Phase 5A1.
+ * Page d'administration de l'authentification (owner uniquement).
  * Onglet Providers : CRUD des providers SSO (OIDC/OAuth2/SAML) + test de
  * connexion ; onglet Pendings : approbation des identités externes par tenant.
  *

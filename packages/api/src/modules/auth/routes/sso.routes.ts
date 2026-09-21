@@ -1,5 +1,5 @@
 /**
- * Routes SSO publiques (Phase 3) : initiateLogin + callback OIDC/OAuth2.
+ * Routes SSO publiques : initiateLogin + callback OIDC/OAuth2.
  * Le callback répond en HTML (même origine via proxy Vite/Caddy) : range le
  * token dans localStorage puis redirige vers la SPA. Côté pending/erreur,
  * redirige vers /login avec des paramètres lisibles par LoginPage.

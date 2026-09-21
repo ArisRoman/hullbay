@@ -32,7 +32,7 @@ const CACHE_PRUNE_THRESHOLD = 10_000
 /** Fréquence minimale de mise à jour de `lastSeenAt` (anti write-per-request). */
 const TOUCH_INTERVAL_MS = 60_000
 
-// Redis PRÉ-REQUISE (C3) : sans REDIS_URL, pas d'instance — le store retombe sur
+// Redis PRÉ-REQUISE : sans REDIS_URL, pas d'instance — le store retombe sur
 // la mémoire + la DB (source de vérité). Une URL par défaut encourageait des
 // connexions fantômes vers un daemon absent. Erreur de connection loggée (pas
 // crash) : le store doit continuer en mode dégradé mémoire/DB.
@@ -133,7 +133,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
       const ttl = ttlFromDecoded(decoded)
       const session = await prisma.userSession.findUnique({ where: { jti } })
       if (!session) {
-        // Session active sans row : backfill (plan §4) MAIS seulement si
+        // Session active sans row : backfill MAIS seulement si
         // l'utilisateur existe encore — sinon un token d'un compte supprimé
         // ressusciterait une session. `undefined` = vérification indisponible,
         // on tolère le backfill ; `null` = compte absent, on révoque.

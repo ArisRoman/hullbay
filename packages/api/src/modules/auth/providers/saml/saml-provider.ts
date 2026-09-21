@@ -1,5 +1,5 @@
 /**
- * Provider SAML 2.0 générique (Phase 4, §16 du plan).
+ * Provider SAML 2.0 générique.
  *
  * UN SEUL adapter pour TOUS les IdP SAML (Keycloak, Azure AD, Okta…) :
  * aucune branche `if(provider===…)`, aucun id vendor en dur. La config porte

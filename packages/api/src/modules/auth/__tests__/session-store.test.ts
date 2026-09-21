@@ -77,7 +77,7 @@ describe("UserSessionStore", () => {
     expect(store.verifySession(tokenB).sub).toBe("u-1")
   })
 
-  it("revokeUserSessions révoque TOUTES les sessions de l'utilisateur (B3)", async () => {
+  it("revokeUserSessions révoque TOUTES les sessions de l'utilisateur", async () => {
     const tokenA = store.signSession("u-1", "viewer", false)
     const tokenB = store.signSession("u-1", "viewer", false)
     await store.revokeUserSessions("u-1")
@@ -85,7 +85,7 @@ describe("UserSessionStore", () => {
     expect(() => store.verifySession(tokenB)).toThrow("session révoquée")
   })
 
-  it("revokeUserSessions(notJti) préserve la session courante (B3)", async () => {
+  it("revokeUserSessions(notJti) préserve la session courante", async () => {
     const tokenA = store.signSession("u-1", "viewer", false)
     const tokenB = store.signSession("u-1", "viewer", false)
     const { jti } = jwksService.verifyToken(tokenA) as { jti: string }
@@ -94,7 +94,7 @@ describe("UserSessionStore", () => {
     expect(() => store.verifySession(tokenB)).toThrow("session révoquée")
   })
 
-  it("revokeUserSessions n'affecte pas les sessions des autres utilisateurs (B3)", async () => {
+  it("revokeUserSessions n'affecte pas les sessions des autres utilisateurs", async () => {
     const tokenA = store.signSession("u-1", "viewer", false)
     const tokenB = store.signSession("u-2", "viewer", false)
     await store.revokeUserSessions("u-1")

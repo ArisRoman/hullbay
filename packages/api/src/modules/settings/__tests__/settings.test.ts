@@ -39,7 +39,7 @@ const mockOperatorToken = "mock_operator_token";
 const mockViewerToken = "mock_viewer_token";
 const mockInvalidToken = "mock_invalid_token";
 
-// Phase 5B : le tenant courant (défaut sans header) est passé au service.
+// Le tenant courant (défaut sans header) est passé au service.
 const DEFAULT_TENANT_ID = "tenant-default";
 
 describe("Routes /api/settings/domain", () => {

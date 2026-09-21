@@ -1,5 +1,5 @@
 /**
- * AuthCore : cœur métier auth, séparé de la façade AuthService (§13 du plan).
+ * AuthCore : cœur métier auth, séparé de la façade AuthService.
  * Orchestrates le provider local, l'identity mapping, le session-manager et le TOTP.
  * AuthService (service.ts) délègue à ces fonctions en conservant les signatures publiques.
  */
@@ -276,7 +276,7 @@ export async function countUsers(): Promise<number> {
  * des autres tenants.
  */
 export async function listUsers(tenantId: string = DEFAULT_TENANT_ID) {
-  // Membres du tenant d'abord (source unique depuis 5B), puis leurs identités.
+  // Membres du tenant d'abord (source unique), puis leurs identités.
   // Guards `typeof` (au lieu d'une référence directe) : TS considère le modèle
   // Prisma toujours défini à runtime — les guards servent aux harnais mockés.
   const hasMembership = typeof prisma.membership?.findMany === "function"

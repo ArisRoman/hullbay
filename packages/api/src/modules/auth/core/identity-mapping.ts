@@ -5,15 +5,15 @@
  * - Identité connue → retourne le userId (mapping existant).
  * - Identité inconnue → crée une PendingIdentity (jamais de User en auto) et signale
  *   le besoin d'approbation. La création de User + AuthIdentity + Membership est
- *   effectuée en Phase 5A (correction N°20 du plan).
+ *   effectuée lors de l'approbation de la demande.
  *
  * Pour le provider local, les identités sont créées explicitement par
- * createOwner / createUser (Phase 2) : on ne passe jamais par le chemin "pending".
+ * createOwner / createUser : on ne passe jamais par le chemin "pending".
  *
  * NB : `issuer` est NULL pour local/ldap. L'input `findUnique` composé de Prisma
  * exige `issuer: string` — on passe donc par findFirst (filtres acceptant NULL).
  * NB PG : UNIQUE(NULL) ne dédoublonne pas ; un PendingIdentity à issuer NULL est
- * (C5) couvert par un index partiel (issuer IS NULL) sur providerId+subject —
+ * couvert par un index partiel (issuer IS NULL) sur providerId+subject —
  * l'unicité des identités local/ldap est garantie en base, pas seulement ici.
  * correctement évité ici par findFirst+create. (Chemin real pour oidc/saml : 3+/4.)
  */
@@ -82,7 +82,7 @@ export async function resolveIdentity(
       const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined
       if (code !== "P2002") throw err
     }
-    // Notifie le workflow d'approbation (5A1 — subscriber on-deploy-finished).
+    // Notifie le workflow d'approbation (subscriber on-deploy-finished).
     // Fire-and-forget : la création de pending ne doit pas dépendre de l'audit.
     await eventBus.emit(AUTH_AUDIT_EVENTS.pendingCreated, {
       providerId: identity.providerId,

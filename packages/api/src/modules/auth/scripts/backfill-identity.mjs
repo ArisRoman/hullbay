@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Backfill identité (Phase 2) — idempotent (peut s'exécuter plusieurs fois).
+ * Backfill identité — idempotent (peut s'exécuter plusieurs fois).
  *
  * Étape 0 : crée le tenant par défaut ("Default"/"default").
  * Étape 1 : pour chaque User existant → AuthIdentity(local) + Membership(default tenant).

@@ -193,7 +193,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
     // Seed du singleton SystemInfo (version courante = tag déployé via IMAGE_TAG).
     await seedSystemInfo();
 
-    // Registry des providers d'auth (Phase 5A1) : AuthProvider = source de vérité.
+    // Registry des providers d'auth : AuthProvider = source de vérité.
     // Les seeds sont synchronisées en base, puis le registre est hydraté depuis
     // les rows (config déchiffrée, `enabled` injecté). En cas de DB indisponible
     // on garde l'init mémoire (seeds) pour ne pas crasher le boot.

@@ -61,7 +61,7 @@ describe("JwksService", () => {
     expect(jwks.keys[0]!.kty).toBe("RSA")
   })
 
-  // ── Durcissement (Phase 1 review) ──
+  // ── Durcissement ──
 
   it("rejette un token dont le kid est inconnu SANS fallback HS256", () => {
     const forged = jwt.sign(

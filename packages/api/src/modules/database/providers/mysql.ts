@@ -171,7 +171,7 @@ function memberCmd(
  * joué UNE fois au premier init du datadir). Crée les comptes internes GR
  * (replicateur + monitor, mots de passe dérivés → config-secret §23) et PERSISTE
  * les credentials de récupération (SET PERSIST → survivent au restart). Le seed
- * ne bootstrap PAS ici : impossible en phase init (serveur temporaire sous
+ * ne bootstrap PAS ici : impossible au moment de l'init (serveur temporaire sous
  * --skip-networking) — le bootstrap réel se fait au 1er démarrage du serveur
  * final via le flag CLI du membre 0.
  */

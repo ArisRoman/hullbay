@@ -1,6 +1,6 @@
 /**
  * Routes d'administration des identités externes en attente d'approbation
- * (owner uniquement, Phase 5A1 / correction N°20).
+ * (owner uniquement).
  *
  * GET  /api/auth/admin/pendings              → liste des demandes
  * POST /api/auth/admin/pendings/:id/approve  → {tenantId, role} → User+AuthIdentity+Membership
