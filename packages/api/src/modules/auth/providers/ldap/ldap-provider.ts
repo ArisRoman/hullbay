@@ -98,14 +98,24 @@ export class LdapProvider implements AuthProviderContract {
 
   private createClient(timeoutMs?: number, urlOverride?: string): Client {
     const timeout = timeoutMs ?? this.options.timeoutMs ?? 5000
+    // ldapts active le TLS dès que tlsOptions est fourni (hasTlsOptions), même
+    // sur une URL ldap:// → TLS forcé sur 389 → ECONNRESET. On ne passe
+    // tlsOptions que si l'opérateur l'a explicitement configuré ; sinon ldapts
+    // dérive le TLS du schéma d'URL (ldaps:// reste toujours sécurisé).
+    const tls = this.options.tlsOptions
+    const hasTlsConfig = Boolean(tls && (tls.rejectUnauthorized !== undefined || tls.ca !== undefined))
     return new Client({
       url: urlOverride ?? this.options.url,
       timeout,
       connectTimeout: timeout,
-      tlsOptions: {
-        rejectUnauthorized: this.options.tlsOptions?.rejectUnauthorized ?? true,
-        ca: this.options.tlsOptions?.ca ? [this.options.tlsOptions.ca] : undefined,
-      },
+      ...(tls && hasTlsConfig
+        ? {
+            tlsOptions: {
+              rejectUnauthorized: tls.rejectUnauthorized ?? true,
+              ca: tls.ca ? [tls.ca] : undefined,
+            },
+          }
+        : {}),
       strictDN: false,
     })
   }

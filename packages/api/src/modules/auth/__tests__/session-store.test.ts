@@ -38,6 +38,13 @@ describe("UserSessionStore", () => {
     expect(handle.mfaEnabled).toBe(true)
   })
 
+  it("verifySession expose le jti de la session (marquage de la session courante)", () => {
+    const token = store.signSession("u-1", "owner", true)
+    const { jti } = jwksService.verifyToken(token) as { jti: string }
+    expect(jti).toBeTruthy()
+    expect(store.verifySession(token).jti).toBe(jti)
+  })
+
   it("verifySession rejette un token sans jti", () => {
     const token = jwksService.signPayload({ sub: "u-1", role: "owner" }, { audience: "session" })
     expect(() => store.verifySession(token)).toThrow("sans jti")

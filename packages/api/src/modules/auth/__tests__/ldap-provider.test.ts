@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { createLdapProvider, formatObjectGuid } from "../providers/ldap/ldap-provider"
+import { Client } from "ldapts"
 import { AuthError } from "../providers/types"
 import { IdentityPendingError } from "../core/identity-mapping"
 
@@ -95,6 +96,32 @@ describe("LdapProvider (LDAP / LDAPS)", () => {
     ])
     const guid = formatObjectGuid(buf)
     expect(guid).toBe("04030201-0605-0807-090a-0b0c0d0e0f10")
+  })
+
+  it("createClient — ldap:// sans tlsOptions configuré → AUCUN tlsOptions (bug LDAP en clair)", async () => {
+    const provider = createLdapProvider({ ...baseConfig, url: "ldap://ldap-corp.example.com:389", tlsOptions: undefined })
+    mockClient.bind.mockRejectedValueOnce(new Error("stop avant connect"))
+    await provider.authenticate({ kind: "ldap", ldapUsername: "alice", ldapPassword: "pw" }).catch(() => {})
+    const opts = vi.mocked(Client).mock.calls[0]?.[0] as { url: string; tlsOptions?: unknown }
+    expect(opts.url).toBe("ldap://ldap-corp.example.com:389")
+    expect(opts.tlsOptions).toBeUndefined()
+  })
+
+  it("createClient — ldaps:// sans tlsOptions reste sécurisé (TLS dérivé du schéma)", async () => {
+    const provider = createLdapProvider(baseConfig) // url ldaps://
+    mockClient.bind.mockRejectedValueOnce(new Error("stop"))
+    await provider.authenticate({ kind: "ldap", ldapUsername: "alice", ldapPassword: "pw" }).catch(() => {})
+    const opts = vi.mocked(Client).mock.calls[0]?.[0] as { url: string; tlsOptions?: unknown }
+    expect(opts.url).toMatch(/^ldaps:\/\//)
+    expect(opts.tlsOptions).toBeUndefined()
+  })
+
+  it("createClient — tlsOptions conservés si explicitement configurés (LDAPS self-signed)", async () => {
+    const provider = createLdapProvider({ ...baseConfig, tlsOptions: { rejectUnauthorized: false } })
+    mockClient.bind.mockRejectedValueOnce(new Error("stop"))
+    await provider.authenticate({ kind: "ldap", ldapUsername: "alice", ldapPassword: "pw" }).catch(() => {})
+    const opts = vi.mocked(Client).mock.calls[0]?.[0] as { url: string; tlsOptions?: { rejectUnauthorized?: boolean; ca?: (string | undefined)[] } }
+    expect(opts.tlsOptions?.rejectUnauthorized).toBe(false)
   })
 
   it("authentifie avec succès un utilisateur existant via bind service + user bind", async () => {
