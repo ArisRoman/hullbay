@@ -69,6 +69,7 @@ export function registerAuthGuard(app: FastifyInstance) {
         role: string
         mfaEnabled: boolean
         tenantId?: string
+        jti?: string
       }
 
       // Tenancy à la requête. Override cross-tenant via header : résolu

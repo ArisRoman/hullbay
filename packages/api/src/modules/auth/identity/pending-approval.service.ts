@@ -68,10 +68,11 @@ export async function approvePendingIdentity<const T extends ApproveTarget>(
     throw new PendingApprovalError("provider d'origine introuvable ou supprimé")
   }
 
-  // L'issuer est NULL pour LDAP) : ces demandes sont approuvables au même
-  // titre que les SSO. Les identités purement locales n'entrent jamais dans le
-  // workflow (aucune PendingIdentity n'est créée pour elles).
-  if (!pending.issuer && provider.kind !== "ldap") {
+  // L'issuer est NULL pour LDAP et OAuth2 (aucune notion d'issuer dans ces
+  // flux) : ces demandes sont approuvables au même titre que les SSO. Les
+  // identités purement locales n'entrent jamais dans le workflow (aucune
+  // PendingIdentity n'est créée pour elles).
+  if (!pending.issuer && provider.kind !== "ldap" && provider.kind !== "oauth2") {
     throw new PendingApprovalError("l'approbation exige une identité avec issuer (SSO/LDAP) — demandes locales hors workflow")
   }
 

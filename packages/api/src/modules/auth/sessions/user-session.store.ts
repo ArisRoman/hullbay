@@ -12,6 +12,10 @@ export interface SessionHandle {
   role: string
   mfaEnabled: boolean
   tenantId?: string
+  /** jti de la session — nécessaire pour identifier la session courante côté
+   *  requêtes (create.guard → req.user.jti). Optionnel pour tolérer les
+   *  payloads en cache (Redis/mémoire) émis par une version antérieure. */
+  jti?: string
 }
 
 export interface SessionStore {
@@ -153,7 +157,7 @@ function reconcile(jti: string, decoded: { sub?: string; role?: string; mfaEnabl
         await prisma.userSession
           .create({ data: { jti, userId: decoded.sub!, providerId: decoded.providerId ?? "local", expiresAt } })
           .catch(() => {})
-await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }, ttl)
+await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID, jti }, ttl)
         return
       }
 
@@ -162,7 +166,7 @@ await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: de
         return
       }
 
-      await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }, ttl)
+      await cacheSession(jti, { sub: decoded.sub!, role: decoded.role!, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID, jti }, ttl)
       touchSession(jti)
     } catch {
       // best-effort : la vérification synchrone a déjà répondu
@@ -179,7 +183,7 @@ export class UserSessionStore implements SessionStore {
       { sub: userId, role, mfaEnabled, jti, providerId, tenantId },
       { expiresIn: Math.floor(ttl / 1000), audience: AUD_SESSION },
     )
-    const handle: SessionHandle = { sub: userId, role, mfaEnabled, tenantId }
+    const handle: SessionHandle = { sub: userId, role, mfaEnabled, tenantId, jti }
     if (prisma.userSession) prisma.userSession.create({ data: { jti, userId, providerId, expiresAt } }).catch(() => {})
     cacheSession(jti, handle, ttl).catch(() => {})
     return token
@@ -210,11 +214,19 @@ export class UserSessionStore implements SessionStore {
     const cached = activeSessions.get(jti)
     if (cached) {
       touchSession(jti)
-      return cached.handle
+      // Garantit le jti y compris si le handle en cache provient d'un payload
+      // émis par une version antérieure (doté de la clé de Map, toujours là).
+      return { ...cached.handle, jti }
     }
 
     reconcile(jti, decoded)
-    return { sub: decoded.sub, role: decoded.role, mfaEnabled: decoded.mfaEnabled ?? false, tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID }
+    return {
+      sub: decoded.sub,
+      role: decoded.role,
+      mfaEnabled: decoded.mfaEnabled ?? false,
+      tenantId: decoded.tenantId ?? DEFAULT_TENANT_ID,
+      jti,
+    }
   }
 
   async revokeUserSessions(userId: string, notJti?: string): Promise<void> {

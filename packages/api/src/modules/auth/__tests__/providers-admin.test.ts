@@ -170,6 +170,60 @@ describe("Providers admin (owner) — CRUD", () => {
     await app.close()
   })
 
+  it("POST oauth2 — clientSecret OBLIGATOIRE à la création (bug provider sans secret)", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oauth2",
+        name: "OAuth2 sans secret",
+        enabled: true,
+        config: {
+          authorizationUri: "https://idp.example.org/authorize",
+          tokenUri: "https://idp.example.org/token",
+          userinfoUri: "https://idp.example.org/userinfo",
+          clientId: "client-1",
+          redirectUri: "https://sp.example.org/cb",
+        },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("invalid_config")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST oauth2 — avec clientSecret → 201, secret chiffré en base (jamais en clair)", async () => {
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oauth2-new", kind: "oauth2", name: "New", enabled: true, config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oauth2",
+        name: "New",
+        enabled: true,
+        config: {
+          authorizationUri: "https://idp.example.org/authorize",
+          tokenUri: "https://idp.example.org/token",
+          userinfoUri: "https://idp.example.org/userinfo",
+          clientId: "client-1",
+          clientSecret: "super-secret-oauth2",
+          redirectUri: "https://sp.example.org/cb",
+        },
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { config: Record<string, unknown> } }
+    const stored = call.data.config as Record<string, unknown>
+    expect(stored.clientSecret).not.toBe("super-secret-oauth2")
+    expect(String(stored.clientSecret)).toContain(":")
+    expect(JSON.stringify(stored)).not.toContain("super-secret-oauth2")
+    await app.close()
+  })
+
   it("POST — kind non géré (ldap) → 400", async () => {
     const app = await buildApp()
     const res = await app.inject({
@@ -346,6 +400,27 @@ describe("Workflow d'approbation (owner)", () => {
       }),
     )
     await vi.waitFor(() => expect(emitMock).toHaveBeenCalledWith("auth.pending.approved", expect.any(Object)))
+    await app.close()
+  })
+
+  it("approve — demande OAuth2 (issuer NULL) approuvable — bug gate issuer", async () => {
+    vi.mocked(prisma.pendingIdentity.findFirst).mockResolvedValue({
+      id: "pending-oauth2", providerId: "oauth2-test", issuer: null, subject: "a7bc8585",
+      email: "alice@hullbay.local", name: "Alice", requestedForTenantId: null, status: "pending",
+    } as never)
+    vi.mocked(prisma.tenant.findUnique).mockResolvedValue({ id: "t-1", name: "Default" } as never)
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ id: "oauth2-test", kind: "oauth2" } as never)
+    const tx = txMock()
+    vi.mocked(prisma.$transaction).mockImplementation((async (fn: (t: unknown) => Promise<unknown>) => fn(tx as never)) as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/pendings/pending-oauth2/approve",
+      payload: { tenantId: "t-1", role: "viewer" },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(tx.user.create).toHaveBeenCalled()
+    expect(tx.authIdentity.create).toHaveBeenCalled()
     await app.close()
   })
 

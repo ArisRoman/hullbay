@@ -112,6 +112,11 @@ POSTGRES_DB=hullbay
 # et secrets MFA/registre/SSH indéchiffrables. SAUVEGARDE CRITIQUE.
 JWT_SECRET=$(gen)
 MFA_ENCRYPTION_KEY=$(gen)
+$([ -n "$PUBLIC_HOST" ] && echo "
+# WebAuthn (passkeys) : posés uniquement en HTTPS (contexte sécurisé exigé).
+WEBAUTHN_ORIGIN=https://${PUBLIC_HOST}
+WEBAUTHN_RP_ID=${PUBLIC_HOST}
+WEBAUTHN_RP_NAME=Hullbay" || true)
 EOF
   chmod 600 .env
   warn "SAUVEGARDE .env (JWT_SECRET + MFA_ENCRYPTION_KEY) ailleurs : leur perte = catastrophe."

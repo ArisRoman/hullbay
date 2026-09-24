@@ -188,6 +188,17 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         const details = parsed.error.flatten().fieldErrors
         return reply.code(400).send({ error: "invalid_config", message: "configuration invalide", code: "invalid_config", details })
       }
+      // OAuth2 confidentiel : le provider envoie toujours client_secret au token
+      // endpoint (oauth2-provider.ts). Accepté optionnel, un provider créé sans
+      // secret était silencieusement inutilisable (invalid_client_credentials).
+      if (body.kind === "oauth2" && !parsed.data.clientSecret) {
+        return reply.code(400).send({
+          error: "invalid_config",
+          message: "OAuth2 : clientSecret requis à la création (flux confidentiel)",
+          code: "invalid_config",
+          details: { clientSecret: ["requis — le token endpoint exige client_secret (flux confidentiel)"] },
+        })
+      }
       const config = encryptObject(parsed.data, SENSITIVE_FIELDS_BY_KIND[body.kind])
       try {
         const row = await prisma.authProvider.create({
