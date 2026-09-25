@@ -40,7 +40,11 @@
     "validation_failed": "Données de formulaire invalides.",
     "mfa_enrollment_missing": "Aucun enrôlement MFA en cours.",
     "password_incorrect": "Le mot de passe actuel est incorrect.",
-    "webauthn_not_configured": "L'authentification par clé de sécurité n'est pas configurée sur le serveur."
+    "webauthn_not_configured": "L'authentification par clé de sécurité n'est pas configurée sur le serveur.",
+    "webauthn_origin_forbidden": "Origine de la requête non autorisée.",
+    "webauthn_origin_invalid": "Origin WebAuthn invalide : HTTPS requis en production, sans path ni query ni fragment.",
+    "webauthn_rpid_invalid": "RP ID WebAuthn invalide ou incompatible avec l'origin.",
+    "domain_not_configured": "Un domaine public doit être configuré avant l'activation."
   },
   "bootstrap": {
     "title": "Bienvenue sur hullbay",
@@ -92,18 +96,16 @@
     },
     "mfaModal": {
       "title": "Activer la double authentification",
-      "description": "Pour sécuriser votre compte, activez la double authentification. Scannez ce QR code avec votre application d'authentification (Google Authenticator, Authy, etc.) puis saisissez le code.",
+      "description": "Scannez le code avec votre application d'authentification, puis saisissez le code à 6 chiffres.",
       "preparing": "Préparation en cours...",
       "scanQrTitle": "Scannez le QR code",
-      "scanAppsHint": "Utilisez Google Authenticator, Authy ou une application compatible avec la validation en deux étapes.",
-      "manualEntryLabel": "Configuration manuelle",
-      "manualEntryHint": "Si vous ne pouvez pas scanner le QR code, copiez ce secret dans votre application.",
+      "manualEntryLabel": "Entrer manuellement",
       "copy": "Copier",
       "copied": "Copié",
-      "codeHint": "Saisissez le code à 6 chiffres affiché dans votre application.",
-      "verificationCodeLabel": "Code de vérification",
+      "verificationCodeLabel": "Code à 6 chiffres",
       "confirmButton": "Confirmer l'activation",
-      "passkeyOptional": "Optionnel : ajoutez une clé de sécurité (passkey) pour vous connecter sans code à l'avenir. Vous pouvez aussi le faire plus tard dans Paramètres → Clés de sécurité."
+      "passkeyOptional": "Connectez-vous sans code la prochaine fois.",
+      "addPasskey": "Ajouter une clé de sécurité"
     },
     "sso": {
       "signInWith": "Continuer avec {{name}}",
@@ -619,6 +621,9 @@
       "approveSuccess": "Identité approuvée",
       "rejectSuccess": "Demande rejetée"
     },
+    "errors": {
+      "domainNotConfigured": "Activation impossible : ce provider nécessite un domaine public configuré (Paramètres → Domaine)."
+    },
     "list": {
       "title": "Providers d'authentification",
       "subtitle": "{{count}} provider(s) configuré(s)"
@@ -749,8 +754,24 @@
     },
     "domain": {
       "title": "Nom de domaine",
-      "hint": "Facultatif hors production — configure un domaine public si tu veux tester le HTTPS automatique.",
+      "hint": "Configure un domaine public : prérequis de l'activation des providers SSO et de WebAuthn en production.",
       "configureButton": "Configurer le domaine"
+    },
+    "webauthn": {
+      "title": "WebAuthn / Passkeys",
+      "hint": "Config RP du tenant, stockée en base. L'origin est préremplie depuis le domaine public ; le RP ID est dérivé de l'origin par défaut. Aucune variable d'environnement requise.",
+      "enabledLabel": "Activé",
+      "enabledHint": "En production, l'activation exige un domaine public configuré.",
+      "originLabel": "Origin (origine exacte vue par le navigateur)",
+      "rpIdLabel": "RP ID",
+      "rpIdPlaceholder": "auto — dérivé de l'origin",
+      "rpIdHint": "Laisse vide pour dériver de l'origin.",
+      "rpNameLabel": "RP Name",
+      "saveButton": "Enregistrer",
+      "configured": "configuré",
+      "notConfigured": "non configuré",
+      "saved": "Configuration WebAuthn enregistrée",
+      "noDomainHint": "Aucun domaine public configuré — l'activation sera refusée en production."
     },
     "account": {
       "title": "Compte",

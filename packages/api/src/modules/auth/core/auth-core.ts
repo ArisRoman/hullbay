@@ -154,11 +154,15 @@ export async function login(email: string, password: string) {
 
   trace(AUTH_AUDIT_EVENTS.loginSuccess, { userId: result.userId, email: result.identity.email })
 
+  // Tenant résolu AVANT l'émission du pending token : le mécanisme de
+  // résolution du tenant (identity → membership) s'exécute une seule fois et
+  // lui-même porte le tenant (jamais déduit au moment de la
+  // vérification MFA).
+  const tenantId = await resolveTenantIdForUser(result.userId)
   if (result.mfaRequired) {
-    return { mfaRequired: true as const, pendingToken: sessionManager.signPending(result.userId) }
+    return { mfaRequired: true as const, pendingToken: sessionManager.signPending(result.userId, tenantId) }
   }
 
-  const tenantId = await resolveTenantIdForUser(result.userId)
   const role = await resolveRoleForUser(result.userId, tenantId, result.role)
   return {
     mfaRequired: false as const,
@@ -167,7 +171,9 @@ export async function login(email: string, password: string) {
 }
 
 export async function verifyMfa(pendingToken: string, code: string) {
-  const { sub } = sessionManager.verifyPending(pendingToken)
+  // Tenant du pending token : même sémantique que la route WebAuthn (TOTP et
+  // WebAuthn signent la session dans le tenant du token MFA, pas celui déduit).
+  const { sub, tenantId } = sessionManager.verifyPending(pendingToken)
 
   const identity = await findMfaIdentityByUserId(sub)
   if (!identity?.mfaSecretEnc) {
@@ -187,7 +193,6 @@ export async function verifyMfa(pendingToken: string, code: string) {
 
   trace(AUTH_AUDIT_EVENTS.mfaSuccess, { userId: sub })
 
-  const tenantId = await resolveTenantIdForUser(sub)
   const role = await resolveRoleForUser(sub, tenantId)
   return { token: sessionManager.signSession(sub, role, true, "local", tenantId) }
 }

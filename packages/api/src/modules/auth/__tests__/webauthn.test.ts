@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest"
 import {
   generateWebauthnRegistrationOptions,
   verifyWebauthnRegistration,
@@ -59,7 +59,13 @@ vi.mock("../../../lib/event-bus", () => ({
   },
 }))
 
+// Configuration RP : source de vérité = Settings en base (tenant-scoped).
+const mockSettingsService = vi.hoisted(() => ({ getWebauthn: vi.fn() }))
+vi.mock("../../settings/service", () => ({ settingsService: mockSettingsService }))
+
 import { prisma } from "../../../lib/prisma"
+
+const TENANT = "tenant-a"
 
 describe("WebAuthn / Passkeys Factor", () => {
   const userId = "u-alice"
@@ -79,18 +85,267 @@ describe("WebAuthn / Passkeys Factor", () => {
     webauthnChallengeStore.clear()
   })
 
-  describe("Configuration du Relying Party", () => {
-    it("fail-closed en production sans WEBAUTHN_ORIGIN", () => {
-      const prevNodeEnv = process.env.NODE_ENV
-      const prevOrigin = process.env.WEBAUTHN_ORIGIN
+  describe("Configuration du Relying Party (production, base de données)", () => {
+    const prevNodeEnv = process.env.NODE_ENV
+
+    afterAll(() => {
+      process.env.NODE_ENV = prevNodeEnv
+    })
+
+    beforeEach(() => {
       process.env.NODE_ENV = "production"
-      delete process.env.WEBAUTHN_ORIGIN
+    })
+
+    it("lit la configuration depuis Settings du tenant", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: "auth.example.com",
+        rpName: "Hullbay",
+      })
+
+      const cfg = await getWebauthnConfig({ tenantId: TENANT })
+
+      expect(cfg).toEqual({
+        rpName: "Hullbay",
+        rpID: "auth.example.com",
+        origin: "https://auth.example.com",
+        allowedOrigins: ["https://auth.example.com"],
+      })
+      expect(mockSettingsService.getWebauthn).toHaveBeenCalledWith(TENANT)
+    })
+
+    it("dérive le RP ID du hostname de l'origin quand il est absent", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      const cfg = await getWebauthnConfig({ tenantId: TENANT })
+
+      expect(cfg.rpID).toBe("auth.example.com")
+    })
+
+    it("ignore les variables d'environnement héritées (plus de source env)", async () => {
+      const prevOrigin = process.env.WEBAUTHN_ORIGIN
+      process.env.WEBAUTHN_ORIGIN = "https://env.example.com"
       try {
-        expect(() => getWebauthnConfig()).toThrow(AuthError)
+        mockSettingsService.getWebauthn.mockResolvedValueOnce({
+          enabled: true,
+          origin: "https://db.example.com",
+          rpId: null,
+          rpName: "Hullbay",
+        })
+
+        const cfg = await getWebauthnConfig({ tenantId: TENANT })
+
+        expect(cfg.origin).toBe("https://db.example.com")
       } finally {
-        process.env.NODE_ENV = prevNodeEnv
         if (prevOrigin) process.env.WEBAUTHN_ORIGIN = prevOrigin
+        else delete process.env.WEBAUTHN_ORIGIN
       }
+    })
+
+    it("config absente → webauthn_not_configured", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: false,
+        origin: null,
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      await expect(getWebauthnConfig({ tenantId: TENANT })).rejects.toMatchObject({
+        code: "webauthn_not_configured",
+      })
+    })
+
+    it("WebAuthn désactivé → webauthn_not_configured", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: false,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      await expect(getWebauthnConfig({ tenantId: TENANT })).rejects.toMatchObject({
+        code: "webauthn_not_configured",
+      })
+    })
+
+    it("origin absente → webauthn_not_configured", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: null,
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      await expect(getWebauthnConfig({ tenantId: TENANT })).rejects.toMatchObject({
+        code: "webauthn_not_configured",
+      })
+    })
+
+    it("clientOrigin correspondant à l'origin configurée → accepté", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      const cfg = await getWebauthnConfig({ tenantId: TENANT, clientOrigin: "https://auth.example.com" })
+
+      expect(cfg.origin).toBe("https://auth.example.com")
+    })
+
+    it("origin http:// héritée → webauthn_not_configured (HTTPS exigé en prod)", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "http://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      await expect(getWebauthnConfig({ tenantId: TENANT })).rejects.toMatchObject({
+        code: "webauthn_not_configured",
+      })
+    })
+
+    it("clientOrigin différent → rejet (403 webauthn_origin_forbidden)", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      await expect(
+        getWebauthnConfig({ tenantId: TENANT, clientOrigin: "https://evil.example.com" }),
+      ).rejects.toMatchObject({ code: "webauthn_origin_forbidden", status: 403 })
+    })
+
+    it("le tenant A ne peut pas utiliser la configuration du tenant B", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://a.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://b.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      const cfgA = await getWebauthnConfig({ tenantId: "tenant-a" })
+      const cfgB = await getWebauthnConfig({ tenantId: "tenant-b", clientOrigin: "https://b.example.com" })
+
+      expect(cfgA.origin).toBe("https://a.example.com")
+      expect(cfgB.origin).toBe("https://b.example.com")
+    })
+  })
+
+  describe("Configuration du Relying Party (développement / test)", () => {
+    const prevNodeEnv = process.env.NODE_ENV
+
+    beforeEach(() => {
+      process.env.NODE_ENV = "test"
+    })
+
+    afterAll(() => {
+      process.env.NODE_ENV = prevNodeEnv
+    })
+
+    it("fallback localhost conservé en test — aucune config active en base", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: false,
+        origin: null,
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      const cfg = await getWebauthnConfig({ tenantId: TENANT, clientOrigin: "http://localhost:3000" })
+      expect(cfg.origin).toBe("http://localhost:3000")
+      expect(cfg.rpID).toBe("localhost")
+      expect(mockSettingsService.getWebauthn).toHaveBeenCalledWith(TENANT)
+    })
+
+    it("fallback localhost sans clientOrigin (défaut)", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: false,
+        origin: null,
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      const cfg = await getWebauthnConfig({ tenantId: TENANT })
+      expect(cfg.origin).toBe("http://localhost:5273")
+      expect(mockSettingsService.getWebauthn).toHaveBeenCalledWith(TENANT)
+    })
+
+    it("config DB active en test → utilisée (jamais le fallback)", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      const cfg = await getWebauthnConfig({ tenantId: TENANT })
+      expect(cfg.origin).toBe("https://auth.example.com")
+      expect(cfg.rpID).toBe("auth.example.com")
+    })
+
+    it("config DB active en test + clientOrigin différent → 403 webauthn_origin_forbidden", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      await expect(
+        getWebauthnConfig({ tenantId: TENANT, clientOrigin: "https://evil.example.com" }),
+      ).rejects.toMatchObject({ code: "webauthn_origin_forbidden", status: 403 })
+    })
+
+    it("aucune fuite entre tenants en environnement test (config active)", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://a.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://b.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+
+      const cfgA = await getWebauthnConfig({ tenantId: "tenant-a" })
+      const cfgB = await getWebauthnConfig({ tenantId: "tenant-b" })
+      expect(cfgA.origin).toBe("https://a.example.com")
+      expect(cfgB.origin).toBe("https://b.example.com")
+    })
+
+    it("cérémonie d'enrôlement en test avec config DB active → config du tenant", async () => {
+      mockSettingsService.getWebauthn.mockResolvedValueOnce({
+        enabled: true,
+        origin: "https://auth.example.com",
+        rpId: null,
+        rpName: "Hullbay",
+      })
+      vi.mocked(prisma.authIdentity.findFirst).mockResolvedValueOnce(mockIdentity as any)
+      mockGenerateRegOptions.mockResolvedValueOnce({ challenge: "reg-ch" })
+
+      await generateWebauthnRegistrationOptions(userId, TENANT)
+
+      const regOptions = mockGenerateRegOptions.mock.calls[0]?.[0] as {
+        rpName: string
+        rpID: string
+      }
+      expect(regOptions.rpID).toBe("auth.example.com")
+      expect(regOptions.rpName).toBe("Hullbay")
     })
   })
 
@@ -103,7 +358,7 @@ describe("WebAuthn / Passkeys Factor", () => {
         user: { id: "u-alice", name: "alice@example.com", displayName: "Alice" },
       })
 
-      const options = await generateWebauthnRegistrationOptions(userId)
+      const options = await generateWebauthnRegistrationOptions(userId, TENANT)
 
       expect(options.challenge).toBe("test-reg-challenge-123")
       expect(webauthnChallengeStore.getAndConsume(`reg:${userId}`)).toBe("test-reg-challenge-123")
@@ -113,7 +368,7 @@ describe("WebAuthn / Passkeys Factor", () => {
       vi.mocked(prisma.authIdentity.findFirst).mockResolvedValueOnce(mockIdentity as any)
       mockGenerateRegOptions.mockResolvedValueOnce({ challenge: "c" })
 
-      await generateWebauthnRegistrationOptions(userId)
+      await generateWebauthnRegistrationOptions(userId, TENANT)
 
       expect(mockGenerateRegOptions).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -126,7 +381,7 @@ describe("WebAuthn / Passkeys Factor", () => {
       vi.mocked(prisma.authIdentity.findFirst).mockResolvedValueOnce(mockIdentity as any)
       mockGenerateRegOptions.mockResolvedValueOnce({ challenge: "ch-token" })
 
-      await generateWebauthnRegistrationOptions(userId, undefined, "tokA")
+      await generateWebauthnRegistrationOptions(userId, TENANT, undefined, "tokA")
 
       expect(webauthnChallengeStore.getAndConsume(`reg:${userId}:tokA`)).toBe("ch-token")
       expect(webauthnChallengeStore.getAndConsume(`reg:${userId}`)).toBeNull()
@@ -135,7 +390,7 @@ describe("WebAuthn / Passkeys Factor", () => {
     it("lève une erreur si l'identité locale n'existe pas", async () => {
       vi.mocked(prisma.authIdentity.findFirst).mockResolvedValueOnce(null)
 
-      await expect(generateWebauthnRegistrationOptions("unknown")).rejects.toThrow(AuthError)
+      await expect(generateWebauthnRegistrationOptions("unknown", TENANT)).rejects.toThrow(AuthError)
     })
 
     it("retombe sur une identité externe (LDAP/OIDC/SAML) sans identité locale", async () => {
@@ -149,7 +404,7 @@ describe("WebAuthn / Passkeys Factor", () => {
         } as any)
       mockGenerateRegOptions.mockResolvedValueOnce({ challenge: "ext-reg-challenge" })
 
-      const options = await generateWebauthnRegistrationOptions(userId)
+      const options = await generateWebauthnRegistrationOptions(userId, TENANT)
 
       expect(options.challenge).toBe("ext-reg-challenge")
       expect(prisma.authIdentity.findFirst).toHaveBeenCalledTimes(2)
@@ -177,7 +432,7 @@ describe("WebAuthn / Passkeys Factor", () => {
       tx.webauthnCredential.create.mockResolvedValueOnce({ id: "wc-1", credentialId: "cred-id-abc" })
       tx.authIdentity.update.mockResolvedValueOnce({ id: "id-local-1", mfaEnabled: true })
 
-      const res = await verifyWebauthnRegistration(userId, {
+      const res = await verifyWebauthnRegistration(userId, TENANT, {
         response: { id: "cred-id-abc" } as any,
         name: "YubiKey 5C",
       })
@@ -201,7 +456,7 @@ describe("WebAuthn / Passkeys Factor", () => {
 
     it("rejette la vérification si le challenge a expiré ou a déjà été consommé", async () => {
       await expect(
-        verifyWebauthnRegistration(userId, { response: {} as any }),
+        verifyWebauthnRegistration(userId, TENANT, { response: {} as any }),
       ).rejects.toThrow(AuthError)
     })
   })
@@ -227,7 +482,7 @@ describe("WebAuthn / Passkeys Factor", () => {
         allowCredentials: [{ id: "cred-id-abc" }],
       })
 
-      const options = await generateWebauthnAuthenticationOptions(userId)
+      const options = await generateWebauthnAuthenticationOptions(userId, TENANT)
 
       expect(options.challenge).toBe("test-auth-challenge-456")
       expect(webauthnChallengeStore.getAndConsume(`auth:${userId}`)).toBe("test-auth-challenge-456")
@@ -236,7 +491,7 @@ describe("WebAuthn / Passkeys Factor", () => {
     it("lève une erreur si aucune clé WebAuthn n'est enregistrée pour l'utilisateur", async () => {
       vi.mocked(prisma.authIdentity.findFirst).mockResolvedValueOnce(mockIdentity as any)
 
-      await expect(generateWebauthnAuthenticationOptions(userId)).rejects.toThrow(AuthError)
+      await expect(generateWebauthnAuthenticationOptions(userId, TENANT)).rejects.toThrow(AuthError)
     })
 
     it("vérifie l'authentification avec succès et met à jour le compteur", async () => {
@@ -255,7 +510,7 @@ describe("WebAuthn / Passkeys Factor", () => {
 
       vi.mocked(prisma.webauthnCredential.update).mockResolvedValueOnce({} as any)
 
-      const res = await verifyWebauthnAuthentication(userId, {
+      const res = await verifyWebauthnAuthentication(userId, TENANT, {
         response: { id: "cred-id-abc" } as any,
       })
 
@@ -276,7 +531,7 @@ describe("WebAuthn / Passkeys Factor", () => {
       } as any)
 
       await expect(
-        verifyWebauthnAuthentication(userId, {
+        verifyWebauthnAuthentication(userId, TENANT, {
           response: { id: "wrong-credential-id" } as any,
         }),
       ).rejects.toThrow(AuthError)

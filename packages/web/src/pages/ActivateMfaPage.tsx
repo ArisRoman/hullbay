@@ -86,7 +86,7 @@ export function ActivateMfaPage() {
     <div className="w-full max-w-[390px]">
 
       {/* Header */}
-      <div className="mb-6 text-center">
+      <div className="hb-animate-mfa-in mb-6 text-center">
         <Heading
           level="h1"
           className="mb-2 text-xl font-semibold text-ui-fg-base"
@@ -99,13 +99,11 @@ export function ActivateMfaPage() {
         </Text>
       </div>
 
-      {/* QR Code */}
-      <div className="mb-4 rounded-xl bg-ui-bg-base p-5 shadow-sm">
-        <div className="mb-3 text-center">
-          <Text className="text-sm font-medium text-ui-fg-base">
-            {t("auth.mfaModal.scanQrTitle")}
-          </Text>
-        </div>
+      {/* QR + secret manuel (une seule surface) */}
+      <div className="hb-animate-mfa-in mb-5 rounded-xl bg-ui-bg-base p-5 shadow-sm" style={{ animationDelay: "60ms" }}>
+        <Text className="mb-3 text-center text-sm font-medium text-ui-fg-base">
+          {t("auth.mfaModal.scanQrTitle")}
+        </Text>
 
         <div className="flex justify-center">
           {otpauth ? (
@@ -113,7 +111,7 @@ export function ActivateMfaPage() {
               <QRCodeSVG value={otpauth} size={180} marginSize={2} />
             </div>
           ) : (
-            <div className="flex h-[212px] items-center justify-center">
+            <div className="flex h-[212px] w-full animate-pulse items-center justify-center rounded-xl bg-ui-bg-base-pressed">
               <Text className="text-sm text-ui-fg-muted">
                 {t("auth.mfaModal.preparing")}
               </Text>
@@ -121,51 +119,37 @@ export function ActivateMfaPage() {
           )}
         </div>
 
-        <Text className="mt-3 text-center text-xs text-ui-fg-subtle">
-          {t("auth.mfaModal.scanAppsHint")}
-        </Text>
-      </div>
+        <div className="mt-4 border-t border-ui-border-base pt-4">
+          <Text className="mb-1.5 text-xs text-ui-fg-muted">
+            {t("auth.mfaModal.manualEntryLabel")}
+          </Text>
 
-      {/* Secret */}
-      <div className="mb-4 rounded-xl bg-ui-bg-base p-4 shadow-sm">
-        <Label
-          size="small"
-          className="mb-1.5 block text-ui-fg-subtle"
-        >
-          {t("auth.mfaModal.manualEntryLabel")}
-        </Label>
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1 rounded-lg bg-ui-bg-base-pressed p-3 text-xs font-mono break-all text-ui-fg-base">
+              {secret ?? "—"}
+            </div>
 
-        <Text className="mb-3 text-xs text-ui-fg-subtle">
-          {t("auth.mfaModal.manualEntryHint")}
-        </Text>
-
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1 rounded-lg bg-ui-bg-base-pressed p-3 text-xs font-mono break-all text-ui-fg-base">
-            {secret ?? "—"}
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={copySecret}
+              disabled={!secret}
+              className="shrink-0 transition-transform active:scale-[0.97]"
+            >
+              {copied ? t("auth.mfaModal.copied") : t("auth.mfaModal.copy")}
+            </Button>
           </div>
-
-          <Button
-            variant="secondary"
-            size="small"
-            onClick={copySecret}
-          >
-            {copied ? t("auth.mfaModal.copied") : t("auth.mfaModal.copy")}
-          </Button>
         </div>
       </div>
 
-      {/* Verification code */}
-      <div className="mb-5 rounded-xl bg-ui-bg-base p-4 shadow-sm">
+      {/* Code de vérification */}
+      <div className="mb-5">
         <Label
           size="small"
           className="mb-1.5 block text-ui-fg-subtle"
         >
           {t("auth.mfaModal.verificationCodeLabel")}
         </Label>
-
-        <Text className="mb-3 text-xs text-ui-fg-subtle">
-          {t("auth.mfaModal.codeHint")}
-        </Text>
 
         <Input
           value={code}
@@ -182,19 +166,18 @@ export function ActivateMfaPage() {
         onClick={confirm}
         isLoading={loading}
         disabled={code.length !== 6}
-        className="h-10 w-full rounded-lg"
+        className="h-10 w-full rounded-lg transition-transform active:scale-[0.97]"
       >
         {t("auth.mfaModal.confirmButton")}
       </Button>
 
-      {/* Clé de sécurité (optionnel) : permet d'utiliser une passkey au login
-          dès le premier enrôlement, sans devoir passer par les Paramètres.
-          L'API autorise register/options+verify pendant l'enrôlement forcé. */}
-      <div className="mt-6">
-        <Text className="mb-3 text-xs leading-5 text-ui-fg-subtle">
+      {/* Clé de sécurité (optionnel) : action compacte — l'API autorise
+          register/options+verify pendant l'enrôlement forcé. */}
+      <div className="mt-6 flex items-center justify-between gap-3">
+        <Text className="text-xs leading-5 text-ui-fg-subtle">
           {t("auth.mfaModal.passkeyOptional")}
         </Text>
-        <PasskeysCard />
+        <PasskeysCard compact />
       </div>
     </div>
   </div>

@@ -455,6 +455,22 @@ export const api = {
       body: JSON.stringify({ domain }),
     }),
 
+  // WebAuthn / Passkeys — config RP du tenant (owner), stockée en base
+  getSettingsWebauthn: () =>
+    req<{ enabled: boolean; origin: string | null; rpId: string | null; rpName: string }>(
+      "/api/settings/webauthn",
+    ),
+  setSettingsWebauthn: (input: {
+    enabled: boolean
+    origin?: string
+    rpId?: string
+    rpName?: string
+  }) =>
+    req<{ enabled: boolean; origin: string | null; rpId: string | null; rpName: string }>(
+      "/api/settings/webauthn",
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
   // Mises à jour de l'instance (owner uniquement)
   updatesCheck: (params: { channel?: UpdateChannel | "all" } = {}) => {
     const qs = params.channel ? `?channel=${params.channel}` : "";

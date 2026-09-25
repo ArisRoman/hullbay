@@ -290,7 +290,7 @@ describe("Auth hardening", () => {
 
     it("rejette un code MFA invalide (audience valide)", async () => {
       const pending = jwt.sign(
-        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending", tenantId: "tenant-default" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );
@@ -363,7 +363,7 @@ describe("Auth hardening", () => {
 
     it("journalise auth.mfa.failed sur un code TOTP invalide", async () => {
       const pending = jwt.sign(
-        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending", tenantId: "tenant-default" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );
@@ -379,7 +379,7 @@ describe("Auth hardening", () => {
       const secret = generateSecret({ length: 20 });
       IDENTITY_MFA_USER.mfaSecretEnc = encryptSecret(secret);
       const pending = jwt.sign(
-        { sub: IDENTITY_MFA_USER.userId, mfa: "pending" },
+        { sub: IDENTITY_MFA_USER.userId, mfa: "pending", tenantId: "tenant-default" },
         SECRET,
         { expiresIn: "5m", audience: "mfa-pending" },
       );

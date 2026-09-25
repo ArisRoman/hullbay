@@ -235,6 +235,13 @@ export function AdminProvidersPage() {
       return `${err.message} — ${entry[0]}: ${entry[1]?.[0] ?? ""}`
     },
     invalidate: [["admin", "providers"]],
+    onError: (err) => {
+      //  le provider nécessite un domaine public configuré avant activation.
+      // Aucun retry automatique, l'état du provider n'est jamais modifié.
+      if ((err as ApiError).code === "domain_not_configured") {
+        toast.error(t("providers.errors.domainNotConfigured"))
+      }
+    },
     onSuccess: closeModal,
   })
 
@@ -248,8 +255,11 @@ export function AdminProvidersPage() {
       }),
     invalidate: [["admin", "providers"]],
     onError: (err) => {
-      if (err instanceof Error && (err as ApiError).code === "last_active_provider") {
+      const code = (err as ApiError).code
+      if (code === "last_active_provider") {
         toast.error(t("providers.toast.lastActiveProvider"))
+      } else if (code === "domain_not_configured") {
+        toast.error(t("providers.errors.domainNotConfigured"))
       }
     },
   })

@@ -5,6 +5,7 @@ import { settingsService } from "./service";
 import { currentUser, requireRole } from "../auth/rbac";
 import type { TenantScopedRequest } from "../auth/tenancy/tenant-resolver";
 import { eventBus } from "../../lib/event-bus";
+import { AuthError } from "../auth/providers/types";
 
 /**
  * Routes des parametres systeme. Lecture, ecriture reserve au owner
@@ -76,6 +77,60 @@ export async function registerSettingsRoutes(app: FastifyInstance) {
                 .send({ error: err instanceof Error ? err.message : String(err) })
             }
 
+        },
+    )
+
+    // ── WebAuthn / Passkeys (config RP du tenant, publique, lue en base) ──
+
+    app.get(
+        "/api/settings/webauthn", {
+            ...owner,
+            schema: {
+                tags: ["settings"],
+                summary: "Lire la configuration WebAuthn du tenant (owner uniquement)",
+                security: [{ bearerAuth: [] }],
+            },
+        },
+        // Tenant effectif de la requête (jamais de DEFAULT_TENANT_ID silencieux).
+        async (req) => settingsService.getWebauthn((req as TenantScopedRequest).tenantId!),
+    )
+
+    const webauthnBody = z.object({
+        enabled: z.boolean(),
+        origin: z.string().optional(),
+        rpId: z.string().optional(),
+        rpName: z.string().optional(),
+    })
+
+    app.post(
+        "/api/settings/webauthn", {
+            ...owner,
+            schema: {
+                body: webauthnBody,
+                tags: ["settings"],
+                summary: "Enregistrer la configuration WebAuthn du tenant (owner uniquement)",
+                security: [{ bearerAuth: [] }],
+            },
+        },
+        async (req, reply) => {
+            const body = webauthnBody.parse(req.body)
+            const tenantId = (req as TenantScopedRequest).tenantId!
+            try {
+                const result = await settingsService.setWebauthn(tenantId, body)
+                await eventBus.emit("settings.webauthn.set", {
+                    userId: currentUser(req)?.sub,
+                    tenantId,
+                    enabled: body.enabled,
+                })
+                return result
+            } catch (err) {
+                if (err instanceof AuthError) {
+                    return reply.code(err.status).send({ error: err.message, code: err.code })
+                }
+                // Erreur non métier (ex. base indisponible) : laisser le handler
+                // Fastify répondre (500 réel), pas un 400 qui masquerait la cause.
+                throw err
+            }
         },
     )
 }

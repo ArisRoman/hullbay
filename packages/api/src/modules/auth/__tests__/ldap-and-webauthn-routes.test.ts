@@ -252,6 +252,7 @@ describe("LDAP & WebAuthn Routes", () => {
     it("génère des options d'authentification avec un pendingToken valide", async () => {
       vi.mocked(sessionManager.verifyPending).mockReturnValue({
         sub: "u-1",
+        tenantId: "t-webauthn",
         aud: "mfa-pending",
       } as any)
 
@@ -270,6 +271,7 @@ describe("LDAP & WebAuthn Routes", () => {
     it("vérifie la signature WebAuthn et émet la session finale", async () => {
       vi.mocked(sessionManager.verifyPending).mockReturnValue({
         sub: "u-1",
+        tenantId: "t-webauthn",
         aud: "mfa-pending",
       } as any)
 
@@ -292,6 +294,8 @@ describe("LDAP & WebAuthn Routes", () => {
         ok: true,
         token: "session_token_456",
       })
+      // la session finale porte le TENANT du token pending (jamais dérivé du userId).
+      expect(sessionManager.signSession).toHaveBeenCalledWith("u-1", "operator", true, "local", "t-webauthn")
     })
 
     it("rejette auth/verify sans token ni pendingToken (401)", async () => {
@@ -348,6 +352,72 @@ describe("LDAP & WebAuthn Routes", () => {
       })
 
       expect(res.statusCode).toBe(401)
+    })
+
+    it("rejette l'étape d'enrôlement si la session n'a pas de claim tenantId (401 session_invalid)", async () => {
+      vi.mocked(authService.verifyToken).mockReturnValueOnce({
+        sub: "u-1",
+        role: "owner",
+        mfaEnabled: true,
+      } as any)
+      vi.mocked(sessionManager.verifySession).mockReturnValueOnce({
+        sub: "u-1",
+        role: "owner",
+        mfaEnabled: true,
+      } as any)
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/mfa/webauthn/register/options",
+        headers: { authorization: "Bearer legacy_session" },
+      })
+
+      expect(res.statusCode).toBe(401)
+      expect(res.json().code).toBe("session_invalid")
+    })
+
+    it("rejette l'authentification step-up si la session n'a pas de claim tenantId (401 session_invalid)", async () => {
+      vi.mocked(sessionManager.verifySession).mockReturnValueOnce({
+        sub: "u-1",
+        role: "owner",
+        mfaEnabled: true,
+      } as any)
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/mfa/webauthn/auth/verify",
+        headers: { authorization: "Bearer legacy_session" },
+        payload: { response: { id: "cred_123" } },
+      })
+
+      expect(res.statusCode).toBe(401)
+      expect(res.json().code).toBe("session_invalid")
+      // Aucune tentative de cérémonie sur une session non résolvable.
+      expect(sessionManager.signSession).not.toHaveBeenCalled()
+    })
+
+    it("step-up : le claim tenantId de la session fait autorité pour la config", async () => {
+      vi.mocked(sessionManager.verifySession).mockReturnValueOnce({
+        sub: "u-1",
+        role: "operator",
+        mfaEnabled: true,
+        tenantId: "t-webauthn",
+      } as any)
+      vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+        id: "u-1",
+        role: "operator",
+      } as never)
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/mfa/webauthn/auth/verify",
+        headers: { authorization: "Bearer session_with_claim" },
+        payload: { response: { id: "cred_123" } },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(res.json().ok).toBe(true)
+      expect(sessionManager.signSession).toHaveBeenCalledWith("u-1", "operator", true, "local", "t-webauthn")
     })
   })
 })

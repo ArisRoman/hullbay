@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest"
+import jwt from "jsonwebtoken"
 import { UserSessionStore } from "../sessions/user-session.store"
 import { jwksService } from "../jwks/jwks.service"
 
@@ -50,15 +51,25 @@ describe("UserSessionStore", () => {
     expect(() => store.verifySession(token)).toThrow("sans jti")
   })
 
-  it("signPending retourne un token mfa-pending", () => {
-    const token = store.signPending("u-1")
+  it("signPending retourne un token mfa-pending porteur du tenant", () => {
+    const token = store.signPending("u-1", "tenant-9")
     expect(typeof token).toBe("string")
+    const payload = jwt.verify(token, TEST_JWT_SECRET) as { tenantId?: string }
+    expect(payload.tenantId).toBe("tenant-9")
   })
 
-  it("verifyPending valide un token mfa-pending", () => {
-    const token = store.signPending("u-1")
+  it("verifyPending valide un token mfa-pending et expose sub + tenantId", () => {
+    const token = store.signPending("u-1", "tenant-9")
     const result = store.verifyPending(token)
     expect(result.sub).toBe("u-1")
+    expect(result.tenantId).toBe("tenant-9")
+  })
+
+  it("verifyPending rejette un token mfa-pending sans tenantId", () => {
+    const token = jwksService.signPayload({ sub: "u-1" }, { audience: "mfa-pending" })
+    expect(() => store.verifyPending(token as unknown as string)).toThrowError(
+      expect.objectContaining({ code: "mfa_token_invalid" }),
+    )
   })
 
   it("verifyPending rejette un token non-pending", () => {

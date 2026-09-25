@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest"
 import Fastify from "fastify"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { validatorCompiler, serializerCompiler } from "fastify-type-provider-zod"
@@ -25,6 +25,7 @@ vi.mock("../../../lib/prisma", () => {
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
+    count: vi.fn(),
   }
   const tenant = { findUnique: vi.fn() }
   const authIdentity = { count: vi.fn(), create: vi.fn() }
@@ -53,6 +54,11 @@ vi.mock("../../../lib/event-bus", () => ({
     emit: (...args: unknown[]) => emitMock(...args),
   },
 }))
+
+const { mockSettingsService } = vi.hoisted(() => ({
+  mockSettingsService: { get: vi.fn() },
+}))
+vi.mock("../../settings/service", () => ({ settingsService: mockSettingsService }))
 
 const PENDING_ALICE = {
   id: "pending-1",
@@ -364,6 +370,193 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
     const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { tenantId: string | null } }
     expect(call.data.tenantId).toBeNull()
     expect(res.json().tenantId).toBeNull()
+    await app.close()
+  })
+})
+
+describe("Garde-fou §9 — domaine public requis (production)", () => {
+  const prod = () => {
+    process.env.NODE_ENV = "production"
+  }
+  const prevNodeEnv = process.env.NODE_ENV
+  const OIDC_CONFIG = { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" }
+  const OIDC_ROW = { id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: {} }
+
+  afterAll(() => {
+    process.env.NODE_ENV = prevNodeEnv
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    prod()
+  })
+
+  it("POST oidc actif sans domaine → 400 domain_not_configured, RIEN persisté", async () => {
+    mockSettingsService.get.mockResolvedValue({ domain: null })
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "oidc", name: "NoDomain", enabled: true, config: OIDC_CONFIG },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("domain_not_configured")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST oidc désactivé sans domaine → 201 (état inerte autorisé)", async () => {
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "oidc", name: "NoDomain", enabled: false, config: OIDC_CONFIG },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(mockSettingsService.get).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST oidc actif — provider GLOBAL → domaine de DEFAULT_TENANT_ID requis", async () => {
+    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "oidc", name: "Global", enabled: true, config: OIDC_CONFIG },
+    })
+    expect(res.statusCode).toBe(201)
+    // §9.3 : portée réelle = tenantId null → settings du tenant défaut, jamais du tenant requête.
+    expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
+    await app.close()
+  })
+
+  it("POST oidc actif — provider tenant-scoped → domaine DU TENANT requis (pas du défaut)", async () => {
+    mockSettingsService.get.mockResolvedValue({ domain: "t1.example.com" })
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-t1", kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: OIDC_CONFIG },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(mockSettingsService.get).toHaveBeenCalledWith("t-1")
+    await app.close()
+  })
+
+  it("POST ldap actif sans domaine → 201 (protocol non dépendant du domaine)", async () => {
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "ldap-corp", kind: "ldap", name: "LDAP", enabled: true, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "ldap", name: "LDAP", enabled: true, config: { url: "ldap://dc.example.org", searchBase: "dc=example,dc=org", searchFilter: "(uid={{username}})", stableAttr: "uid" } },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(mockSettingsService.get).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — toggle enabled:true sur oidc sans domaine → 400, update NON appelé", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW } as never)
+    mockSettingsService.get.mockResolvedValue({ domain: null })
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { enabled: true },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("domain_not_configured")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — toggle enabled:true avec domaine configuré → 200", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW } as never)
+    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { enabled: true },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(prisma.authProvider.update).toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT partiel sans enabled — état final = row.enabled (false) → garde ignorée", async () => {
+    // §9.2 : on évalue l'état FINAL (row.enabled si body.enabled absent), jamais
+    // seulement le body. Ici le provider est inerte : la mutation de config est permise.
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ ...OIDC_ROW } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { name: "Rename only" },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockSettingsService.get).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — re-scope vers GLOBAL (tenantId: null) → domaine du tenant DÉFAUT requis, pas de l'ancien", async () => {
+    // §9.3 : portée finale du provider = null → garde contre DEFAULT_TENANT_ID,
+    // même quand la requête vient d'un autre tenant (harnais = t-1).
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW, enabled: true } as never)
+    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { tenantId: null },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
+    await app.close()
+  })
+
+  it("PUT — re-scope vers GLOBAL sans domaine du tenant défaut → 400, update NON appelé", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW, enabled: true } as never)
+    mockSettingsService.get.mockResolvedValue({ domain: null })
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { tenantId: null },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("domain_not_configured")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — désactivation autorisée sans domaine", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW, enabled: true } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(1 as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(200)
     await app.close()
   })
 })
