@@ -23,9 +23,10 @@ import { eventBus } from "../../../lib/event-bus"
 import { encryptObject, encryptProviderSecret } from "../secrets/secret-encryption-service"
 import { SENSITIVE_FIELDS_BY_KIND } from "../registry/seeds"
 import { providerRegistry } from "../registry/provider-registry"
-import type { ProviderKind } from "../providers/types"
+import { AuthError, type ProviderKind } from "../providers/types"
 import { DEFAULT_TENANT_ID } from "../identity/auth-identity.service"
 import type { TenantScopedRequest } from "../tenancy/tenant-resolver"
+import { settingsService } from "../../settings/service"
 
 const owner = { preHandler: requireRole("owner") }
 
@@ -36,6 +37,45 @@ function reqTenant(req: FastifyRequest): string {
 
 /** Marqueur renvoyé à la place d'un secret (présence, jamais la valeur). */
 const SECRET_MASK = "••••••••"
+
+// Protocoles dont le flux repose sur un domaine public (callback/redirect).
+// LDAP et local sont exclus : utilisables sans domaine public.
+const DOMAIN_DEPENDENT_PROTOCOLS = new Set(["oidc", "oauth2", "saml"])
+
+function isProdLike(): boolean {
+  const env = process.env.NODE_ENV
+  return env !== "development" && env !== "test"
+}
+
+/**
+ * Garde-fou : un provider dépendant d'un domaine public ne peut pas être
+ * ACTIF en production sans domaine public configuré pour sa portée.
+ *
+ * Portée réelle du provider (jamais le tenant de la requête) :
+ * - tenant-scoped (tenantId non null) → domaine du Settings de CE tenant ;
+ * - global (tenantId null) → portée installation = domaine du tenant défaut
+ *   (les providers globaux ne sont mutables que depuis DEFAULT_TENANT_ID).
+ */
+async function assertDomainConfigured(kind: string, finalEnabled: boolean, scope: string | null) {
+  if (!isProdLike() || !finalEnabled || !DOMAIN_DEPENDENT_PROTOCOLS.has(kind)) return
+  const tenantId = scope ?? DEFAULT_TENANT_ID
+  const settings = await settingsService.get(tenantId)
+  if (!settings.domain) {
+    throw new AuthError(
+      "domain_not_configured",
+      "activation du provider nécessite un domaine public configuré pour sa portée",
+      400,
+    )
+  }
+}
+
+/** Réponse d'erreur AuthError compacte (400 + code machine). */
+function authErrorPayload(err: unknown) {
+  if (err instanceof AuthError) {
+    return { code: err.code, error: err.message }
+  }
+  return undefined
+}
 
 const oidcConfigSchema = z.object({
   issuer: z.string().url(),
@@ -201,6 +241,8 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       }
       const config = encryptObject(parsed.data, SENSITIVE_FIELDS_BY_KIND[body.kind])
       try {
+        // Garde-fou  : contrôle AVANT persistance sur la portée cible.
+        await assertDomainConfigured(body.kind, body.enabled, body.tenantId ?? null)
         const row = await prisma.authProvider.create({
           data: {
             kind: body.kind,
@@ -215,6 +257,8 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         await eventBus.emit("auth.provider.created", { providerId: row.id, kind: row.kind })
         return reply.code(201).send(dto(row))
       } catch (err) {
+        const payload = authErrorPayload(err)
+        if (payload) return reply.code(err instanceof AuthError ? err.status : 400).send(payload)
         if (err instanceof Error && /unique/i.test(err.message) && body.id) {
           return reply.code(409).send({ error: "provider_conflict", message: "un provider porte déjà cet id", code: "provider_conflict" })
         }
@@ -257,6 +301,23 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         (row.tenantId === null && tenantId !== DEFAULT_TENANT_ID)
       if (notOwned) {
         return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
+      }
+
+// Garde-fou: état FINAL (PUT partiel) + portée réelle du provider.
+      //  ne pas tester uniquement body.enabled — un PUT partiel ne doit
+      //  jamais conserver/atteindre un état invalide.
+      // Portée = tenantId FINAL du provider : un re-scope explicite vers
+      // global (tenantId: null) est évalué contre DEFAULT_TENANT_ID, jamais
+      // contre l'ancien tenant (?? avalerait le null et laisserait passer).
+      const finalEnabled = body.enabled !== undefined ? body.enabled : row.enabled
+      try {
+        await assertDomainConfigured(
+          row.kind,
+          finalEnabled,
+          body.tenantId !== undefined ? body.tenantId : row.tenantId,
+        )
+      } catch (err) {
+        return reply.code(err instanceof AuthError ? err.status : 400).send(authErrorPayload(err))
       }
 
       // Garde anti-lockout : on ne peut jamais désactiver le dernier provider

@@ -8,7 +8,8 @@ import { createHash } from "node:crypto"
 import { prisma } from "../../../lib/prisma"
 import { authService } from "../service"
 import { sessionManager } from "../core/session-manager"
-import { resolveRoleForUser, resolveTenantIdForUser } from "../identity/auth-identity.service"
+import { resolveRoleForUser } from "../identity/auth-identity.service"
+import { tenantFromHeader } from "../tenancy/tenant-resolver"
 import { authRateLimiter, rateLimitTenant } from "../rate-limit"
 import { AuthError } from "../providers/types"
 import {
@@ -61,16 +62,48 @@ function challengeKeyFromRequest(req: FastifyRequest, pendingToken?: string): st
   return createHash("sha256").update(raw).digest("hex").slice(0, 32)
 }
 
-function resolveUserIdFromTokenOrSession(req: FastifyRequest, pendingToken?: string): string {
+/**
+ * Propriétaire (sub) + tenant d'une cérémonie WebAuthn. Le tenant est dérivé du
+ * token MFA (pending) ou du claim session — pas du userId. Sur les routes
+ * publiques (auth/options, auth/verify) aucun header x-tenant-id n'est validé
+ * par la garde : le tenant du token fait autorité pour la config WebAuthn.
+ */
+function resolveUserFromTokenOrSession(req: FastifyRequest, pendingToken?: string): { sub: string; tenantId: string } {
   if (pendingToken) {
-    const { sub } = sessionManager.verifyPending(pendingToken)
-    return sub
+    return sessionManager.verifyPending(pendingToken)
   }
 
   const authHeader = req.headers.authorization
   if (authHeader?.startsWith("Bearer ")) {
     const decoded = sessionManager.verifySession(authHeader.slice(7))
-    return decoded.sub
+    // Session sans claim tenantId (émise avant la migration du claim) : rejet —
+    // jamais de fallback silencieux vers DEFAULT_TENANT_ID (§1.2).
+    if (!decoded.tenantId) {
+      throw new AuthError("session_invalid", "session obsolète, reconnexion requise", 401)
+    }
+    return { sub: decoded.sub, tenantId: decoded.tenantId }
+  }
+
+  throw new AuthError("session_invalid", "Unauthorized session", 401)
+}
+
+/**
+ * Tenant effectif des routes d'enrôlement (authentifiées) : header explicite >
+ * claim tenantId de la session. Une session sans claim (émise avant la
+ * migration du claim) est rejetée — jamais de fallback silencieux vers
+ * DEFAULT_TENANT_ID au moment de résoudre la config WebAuthn (§1.2).
+ */
+function resolveAuthedTenant(req: FastifyRequest): string {
+  const headerTenant = tenantFromHeader(req)
+  if (headerTenant) return headerTenant
+
+  const authHeader = req.headers.authorization
+  if (authHeader?.startsWith("Bearer ")) {
+    const decoded = sessionManager.verifySession(authHeader.slice(7))
+    if (!decoded.tenantId) {
+      throw new AuthError("session_invalid", "session obsolète, reconnexion requise", 401)
+    }
+    return decoded.tenantId
   }
 
   throw new AuthError("session_invalid", "Unauthorized session", 401)
@@ -91,9 +124,11 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
         const userId = (req as FastifyRequest & { user: { sub: string } }).user?.sub
         if (!userId) return reply.code(401).send({ error: "non authentifié" })
 
+        const tenantId = resolveAuthedTenant(req)
         const clientOrigin = (req.headers.origin as string) || undefined
         const options = await generateWebauthnRegistrationOptions(
           userId,
+          tenantId,
           clientOrigin,
           challengeKeyFromRequest(req),
         )
@@ -126,9 +161,11 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
         if (!userId) return reply.code(401).send({ error: "Unauthorized", code: "session_invalid" })
 
         const body = req.body as { response: any; name?: string }
+        const tenantId = resolveAuthedTenant(req)
         const clientOrigin = (req.headers.origin as string) || undefined
         const res = await verifyWebauthnRegistration(
           userId,
+          tenantId,
           body,
           clientOrigin,
           challengeKeyFromRequest(req),
@@ -158,10 +195,11 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const body = (req.body as { pendingToken?: string }) ?? {}
       try {
-        const userId = resolveUserIdFromTokenOrSession(req, body.pendingToken)
+        const { sub: userId, tenantId } = resolveUserFromTokenOrSession(req, body.pendingToken)
         const clientOrigin = (req.headers.origin as string) || undefined
         const options = await generateWebauthnAuthenticationOptions(
           userId,
+          tenantId,
           clientOrigin,
           challengeKeyFromRequest(req, body.pendingToken),
         )
@@ -198,10 +236,11 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
       if (before.blocked) return rateLimited(reply, before.retryAfterSec ?? 1)
 
       try {
-        const userId = resolveUserIdFromTokenOrSession(req, body.pendingToken)
+        const { sub: userId, tenantId } = resolveUserFromTokenOrSession(req, body.pendingToken)
         const clientOrigin = (req.headers.origin as string) || undefined
         await verifyWebauthnAuthentication(
           userId,
+          tenantId,
           { response: body.response },
           clientOrigin,
           challengeKeyFromRequest(req, body.pendingToken),
@@ -215,7 +254,6 @@ export async function registerWebauthnRoutes(app: FastifyInstance) {
         })
         if (!user) return reply.code(404).send({ error: "User not found", code: "user_not_found" })
 
-        const tenantId = await resolveTenantIdForUser(user.id)
         const role = await resolveRoleForUser(user.id, tenantId, user.role)
         return {
           ok: true,

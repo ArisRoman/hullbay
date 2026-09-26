@@ -40,7 +40,11 @@
     "validation_failed": "Invalid form data.",
     "mfa_enrollment_missing": "No MFA enrollment in progress.",
     "password_incorrect": "Current password is incorrect.",
-    "webauthn_not_configured": "Security key authentication is not configured on the server."
+    "webauthn_not_configured": "Security key authentication is not configured on the server.",
+    "webauthn_origin_forbidden": "Request origin not allowed.",
+    "webauthn_origin_invalid": "Invalid WebAuthn origin: HTTPS required in production, no path, query or fragment.",
+    "webauthn_rpid_invalid": "Invalid RP ID or incompatible with the origin.",
+    "domain_not_configured": "A public domain must be configured before enabling this feature."
   },
   "bootstrap": {
     "title": "Welcome to hullbay",
@@ -92,18 +96,16 @@
     },
     "mfaModal": {
       "title": "Enable two-factor authentication",
-      "description": "To secure your account, enable two-factor authentication. Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.) then enter the code.",
+      "description": "Scan the code with your authenticator app, then enter the 6-digit code.",
       "preparing": "Preparing...",
       "scanQrTitle": "Scan the QR code",
-      "scanAppsHint": "Use Google Authenticator, Authy or any 2FA-compatible app.",
-      "manualEntryLabel": "Manual configuration",
-      "manualEntryHint": "If you cannot scan the QR code, copy this secret into your app.",
+      "manualEntryLabel": "Enter manually",
       "copy": "Copy",
       "copied": "Copied",
-      "codeHint": "Enter the 6-digit code shown in your app.",
-      "verificationCodeLabel": "Verification code",
+      "verificationCodeLabel": "6-digit code",
       "confirmButton": "Confirm setup",
-      "passkeyOptional": "Optional: add a security key (passkey) to sign in without a code later. You can also do this later in Settings → Security keys."
+      "passkeyOptional": "Sign in without a code next time.",
+      "addPasskey": "Add a security key"
     },
     "sso": {
       "signInWith": "Continue with {{name}}",
@@ -631,6 +633,9 @@
       "enabled": "active",
       "disabled": "inactive"
     },
+    "errors": {
+      "domainNotConfigured": "Cannot enable: this provider requires a configured public domain (Settings → Domain)."
+    },
     "actions": {
       "new": "New provider",
       "edit": "Edit",
@@ -749,8 +754,24 @@
     },
     "domain": {
       "title": "Domain name",
-      "hint": "Optional outside production — configure a public domain if you want to test automatic HTTPS.",
+      "hint": "Set a public domain: required before enabling SSO providers and WebAuthn in production.",
       "configureButton": "Configure domain"
+    },
+    "webauthn": {
+      "title": "WebAuthn / Passkeys",
+      "hint": "Tenant RP configuration, stored in the database. The origin is pre-filled from the public domain; the RP ID is derived from the origin by default. No environment variables required.",
+      "enabledLabel": "Enabled",
+      "enabledHint": "In production, enabling requires a configured public domain.",
+      "originLabel": "Origin (exact origin seen by the browser)",
+      "rpIdLabel": "RP ID",
+      "rpIdPlaceholder": "auto — derived from the origin",
+      "rpIdHint": "Leave empty to derive from the origin.",
+      "rpNameLabel": "RP Name",
+      "saveButton": "Save",
+      "configured": "configured",
+      "notConfigured": "not configured",
+      "saved": "WebAuthn configuration saved",
+      "noDomainHint": "No public domain configured — enabling will be rejected in production."
     },
     "account": {
       "title": "Account",

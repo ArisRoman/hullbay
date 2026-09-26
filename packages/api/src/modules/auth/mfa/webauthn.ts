@@ -19,6 +19,7 @@ import { prisma } from "../../../lib/prisma"
 import { eventBus } from "../../../lib/event-bus"
 import { AuthError } from "../providers/types"
 import { AUTH_AUDIT_EVENTS } from "../audit-events"
+import { settingsService } from "../../settings/service"
 
 /**
  * Relations chargées pour toute résolution de facteur : l'utilisateur (libellés
@@ -51,69 +52,92 @@ async function findFactorIdentity(userId: string) {
 }
 
 // ── Configuration du Relying Party (RP) ──
+//
+// Source de vérité : Settings du tenant (webauthnEnabled/Origin/RpId/RpName),
+// configurée via l'interface (qui exige un domaine public en production).
+// Les variables d'environnement WEBAUTHN_* ne sont plus lues ici.
 
-export function getWebauthnConfig(clientOrigin?: string) {
-  const rpName = process.env.WEBAUTHN_RP_NAME || "Hullbay"
-  const envRpId = process.env.WEBAUTHN_RP_ID
-  const envOrigin = process.env.WEBAUTHN_ORIGIN
+export async function getWebauthnConfig({
+    tenantId,
+    clientOrigin,
+}: {
+    tenantId: string
+    clientOrigin?: string
+}) {
+    const env = process.env.NODE_ENV
+    const isProdLike = env !== "development" && env !== "test"
 
-  let rpID = envRpId
-  let origin = envOrigin
+    // Source de vérité : les Settings du tenant, quel que soit l'environnement.
+    // jamais l'environnement de processus. clientOrigin n'est qu'une vérification
+    // de contexte (comparée à la config stockée), jamais une source autorisée.
+    // row peut être absent (mocks/tests) → lecture null-safe.
+    const row = await settingsService.getWebauthn(tenantId)
 
-  // Fail-closed : sans WEBAUTHN_ORIGIN, le fallback localhost produirait des
-  // cérémonies invalides (et silencieusement non sécurisées). On ne l'autorise
-  // que pour un environnement explicitement de développement ou de test — une
-  // prod où NODE_ENV est absent/non standard ne doit PAS retomber en mode dev.
-  const env = process.env.NODE_ENV
-  if (!envOrigin && env !== "development" && env !== "test") {
-    throw new AuthError(
-      "webauthn_not_configured",
-      "WEBAUTHN_ORIGIN doit être configuré (hors développement/test)",
-      500,
+    if (row?.enabled && row.origin) {
+        // Origin conservée hors règles de production (ex. http:// héritée d'un
+        // environnement de dev) : jamais de cérémonie sur un contexte non sécurisé.
+        if (isProdLike && !row.origin.startsWith("https://")) {
+            throw new AuthError(
+                "webauthn_not_configured",
+                "WebAuthn requiert une origin HTTPS pour ce tenant",
+                500,
+            )
+        }
+        if (clientOrigin && clientOrigin !== row.origin) {
+            throw new AuthError(
+                "webauthn_origin_forbidden",
+                "origine de la requête non autorisée",
+                403,
+            )
+        }
+        return {
+            rpName: row.rpName || "Hullbay",
+            rpID: row.rpId || new URL(row.origin).hostname,
+            origin: row.origin,
+            allowedOrigins: [row.origin],
+        }
+    }
+
+    // Aucune configuration active en base → fail-closed hors dev/test.
+    if (isProdLike) {
+        throw new AuthError(
+            "webauthn_not_configured",
+            "WebAuthn n'est pas configuré pour ce tenant",
+            500,
+        )
+    }
+
+    // Développement local / test : fallback localhost conservé — uniquement
+    // lorsqu'aucune configuration active n'existe en base. N'accepter
+    // clientOrigin que s'il s'agit d'un hostname local. Jamais disponible en
+    // production (le bloc précédent est fail-closed).
+    const rpName = "Hullbay"
+    let rpID = "localhost"
+    let origin = "http://localhost:5273"
+
+    if (clientOrigin) {
+        try {
+            const parsed = new URL(clientOrigin)
+            if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1") {
+                origin = clientOrigin
+                rpID = parsed.hostname
+            }
+        } catch {
+            // Ignorer origin invalide
+        }
+    }
+
+    const allowedOrigins = Array.from(
+        new Set([
+            origin,
+            "http://localhost:5273",
+            "http://localhost:3000",
+            "http://127.0.0.1:5273",
+            "http://127.0.0.1:3000",
+        ]),
     )
-  }
 
-  // En production avec WEBAUTHN_ORIGIN explicite, on n'autorise QUE l'origine configurée
-  if (envOrigin) {
-    return {
-      rpName,
-      rpID: rpID || new URL(envOrigin).hostname,
-      origin: envOrigin,
-      allowedOrigins: [envOrigin],
-    }
-  }
-
-  // En développement local : n'accepte clientOrigin que s'il s'agit d'un hostname local
-  if (clientOrigin) {
-    try {
-      const parsed = new URL(clientOrigin)
-      if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1") {
-        origin = clientOrigin
-        rpID = parsed.hostname
-      }
-    } catch {
-      // Ignorer origin invalide
-    }
-  }
-
-  if (!origin) {
-    origin = "http://localhost:5273"
-  }
-  if (!rpID) {
-    rpID = "localhost"
-  }
-
-  const allowedOrigins = Array.from(
-    new Set([
-      origin,
-      "http://localhost:5273",
-      "http://localhost:3000",
-      "http://127.0.0.1:5273",
-      "http://127.0.0.1:3000",
-    ]),
-  )
-
-  return { rpName, rpID, origin, allowedOrigins }
+    return { rpName, rpID, origin, allowedOrigins }
 }
 
 /**
@@ -190,6 +214,7 @@ export const webauthnChallengeStore = new WebauthnChallengeStore()
 
 export async function generateWebauthnRegistrationOptions(
   userId: string,
+  tenantId: string,
   clientOrigin?: string,
   challengeKey?: string,
 ) {
@@ -199,7 +224,7 @@ export async function generateWebauthnRegistrationOptions(
     throw new AuthError("mfa_not_configured", "identité introuvable", 400)
   }
 
-  const { rpName, rpID } = getWebauthnConfig(clientOrigin)
+  const { rpName, rpID } = await getWebauthnConfig({ tenantId, clientOrigin })
 
   const excludeCredentials = identity.webauthnCredentials.map((c) => ({
     id: c.credentialId,
@@ -230,6 +255,7 @@ export async function generateWebauthnRegistrationOptions(
 
 export async function verifyWebauthnRegistration(
   userId: string,
+  tenantId: string,
   body: { response: RegistrationResponseJSON; name?: string },
   clientOrigin?: string,
   challengeKey?: string,
@@ -247,7 +273,7 @@ export async function verifyWebauthnRegistration(
     throw new AuthError("mfa_not_configured", "identité introuvable", 400)
   }
 
-  const { rpID, allowedOrigins } = getWebauthnConfig(clientOrigin)
+  const { rpID, allowedOrigins } = await getWebauthnConfig({ tenantId, clientOrigin })
 
   let verification
   try {
@@ -308,6 +334,7 @@ export async function verifyWebauthnRegistration(
 
 export async function generateWebauthnAuthenticationOptions(
   userId: string,
+  tenantId: string,
   clientOrigin?: string,
   challengeKey?: string,
 ) {
@@ -317,7 +344,7 @@ export async function generateWebauthnAuthenticationOptions(
     throw new AuthError("mfa_not_configured", "aucune clé WebAuthn enregistrée pour ce compte", 400)
   }
 
-  const { rpID } = getWebauthnConfig(clientOrigin)
+  const { rpID } = await getWebauthnConfig({ tenantId, clientOrigin })
 
   const allowCredentials = identity.webauthnCredentials.map((c) => ({
     id: c.credentialId,
@@ -337,6 +364,7 @@ export async function generateWebauthnAuthenticationOptions(
 
 export async function verifyWebauthnAuthentication(
   userId: string,
+  tenantId: string,
   body: { response: AuthenticationResponseJSON },
   clientOrigin?: string,
   challengeKey?: string,
@@ -362,7 +390,7 @@ export async function verifyWebauthnAuthentication(
     throw new AuthError("mfa_code_invalid", "clé de sécurité inconnue pour ce compte", 400)
   }
 
-  const { rpID, allowedOrigins } = getWebauthnConfig(clientOrigin)
+  const { rpID, allowedOrigins } = await getWebauthnConfig({ tenantId, clientOrigin })
 
   let verification
   try {

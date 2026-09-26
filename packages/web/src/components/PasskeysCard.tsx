@@ -12,13 +12,14 @@ import { useConfirmDelete } from "../lib/useConfirmDelete"
  * Enrôlement : options serveur → cérémonie navigateur → vérification serveur.
  * La liste ne contient que les champs publics (jamais publicKey/counter).
  */
-export function PasskeysCard() {
+export function PasskeysCard({ compact = false }: { compact?: boolean } = {}) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ["webauthn-credentials"],
     queryFn: api.listWebauthnCredentials,
+    enabled: !compact,
   })
 
   const [name, setName] = useState("")
@@ -63,6 +64,31 @@ export function PasskeysCard() {
     } finally {
       setRegistering(false)
     }
+  }
+
+  // Variante compacte (ex. enrôlement forcé) : seule l'action d'ajout, sans
+  // liste ni gestion. La cérémonie utilise le nom par défaut côté serveur.
+  if (compact) {
+    if (!supported) {
+      return (
+        <Text size="small" className="text-ui-fg-muted">
+          {t("settings.passkeys.unsupported")}
+        </Text>
+      )
+    }
+    return (
+      <Button
+        variant="secondary"
+        size="small"
+        data-testid="passkey-add-compact"
+        onClick={addPasskey}
+        isLoading={registering}
+        className="shrink-0 transition-transform active:scale-[0.97]"
+      >
+        <Key className="h-4 w-4" aria-hidden />
+        {t("auth.mfaModal.addPasskey")}
+      </Button>
+    )
   }
 
   const credentials: WebauthnCredentialPublic[] = data ?? []

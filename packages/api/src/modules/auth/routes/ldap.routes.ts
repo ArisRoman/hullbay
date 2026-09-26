@@ -101,9 +101,12 @@ export async function registerLdapRoutes(app: FastifyInstance) {
         //    l'accès aux routes d'enrôlement et /me force l'activation.
         if (result.mfaRequired) {
           if (await userHasMfaFactor(result.userId)) {
+            // Tenant résolu avant l'émission du pending token : le token MFA
+            // porte le tenant (config WebAuthn résolue à la vérification).
+            const tenantId = await resolveTenantIdForUser(result.userId)
             return {
               mfaRequired: true as const,
-              pendingToken: sessionManager.signPending(result.userId),
+              pendingToken: sessionManager.signPending(result.userId, tenantId),
             }
           }
           const tenantId = await resolveTenantIdForUser(result.userId)

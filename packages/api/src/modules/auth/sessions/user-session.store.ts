@@ -21,8 +21,8 @@ export interface SessionHandle {
 export interface SessionStore {
   signSession(userId: string, role: string, mfaEnabled: boolean, providerId?: string, tenantId?: string): string
   verifySession(token: string): SessionHandle
-  signPending(userId: string): string
-  verifyPending(token: string): { sub: string }
+  signPending(userId: string, tenantId: string): string
+  verifyPending(token: string): { sub: string; tenantId: string }
   revoke(jti: string): Promise<void>
   revokeUserSessions(userId: string, notJti?: string): Promise<void>
 }
@@ -272,24 +272,27 @@ export class UserSessionStore implements SessionStore {
     }
   }
 
-  signPending(userId: string): string {
-    return jwt.sign({ sub: userId, mfa: "pending" }, legacySecret(), {
+  signPending(userId: string, tenantId: string): string {
+    return jwt.sign({ sub: userId, mfa: "pending", tenantId }, legacySecret(), {
       expiresIn: PENDING_TTL,
       audience: AUD_MFA_PENDING,
     })
   }
 
-  verifyPending(token: string): { sub: string } {
-    let decoded: { sub?: string; mfa?: string }
+  verifyPending(token: string): { sub: string; tenantId: string } {
+    let decoded: { sub?: string; mfa?: string; tenantId?: string }
     try {
-      decoded = jwt.verify(token, legacySecret(), { audience: AUD_MFA_PENDING }) as { sub?: string; mfa?: string }
+      decoded = jwt.verify(token, legacySecret(), { audience: AUD_MFA_PENDING }) as { sub?: string; mfa?: string; tenantId?: string }
     } catch {
       throw new AuthError("mfa_token_invalid", "token MFA invalide", 401)
     }
-    if (decoded.mfa !== "pending" || !decoded.sub) {
+    // tenantId obligatoire : la config WebAuthn/MFA est résolue au tenant du
+    // pending token. Un token sans claim (émission antérieure) est rejeté —
+    // jamais de fallback silencieux vers DEFAULT_TENANT_ID.
+    if (decoded.mfa !== "pending" || !decoded.sub || !decoded.tenantId) {
       throw new AuthError("mfa_token_invalid", "token MFA invalide", 401)
     }
-    return { sub: decoded.sub }
+    return { sub: decoded.sub, tenantId: decoded.tenantId }
   }
 }
 

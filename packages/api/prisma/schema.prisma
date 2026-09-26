@@ -313,13 +313,19 @@ model RegistryCredential {
 }
 
 // ── Parametre systeme - domaine public configurable (par tenant en 5B) ──
+// ── Configuration WebAuthn (RP publique, jamais de secret) : source de vérité
+// pour les cérémonies de passkeys, résolue par tenant. Remplaçait WEBAUTHN_* env.
 model Settings {
-  id          String @id @default(cuid())
-  domain      String?
-  updatedAt   DateTime @updatedAt
+  id               String  @id @default(cuid())
+  domain           String?
+  webauthnEnabled  Boolean @default(false)
+  webauthnOrigin   String?
+  webauthnRpId     String?
+  webauthnRpName   String  @default("Hullbay")
+  updatedAt        DateTime @updatedAt
 
-  tenantId    String @unique
-  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId         String @unique
+  tenant           Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 // ── Cluster Docker swarm (TON TRAVAIL) ──
