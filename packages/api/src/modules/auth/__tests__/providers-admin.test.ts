@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import Fastify from "fastify"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import { validatorCompiler, serializerCompiler } from "fastify-type-provider-zod"
@@ -140,6 +142,8 @@ describe("Providers admin (owner) — CRUD", () => {
   it("POST valide — config chiffrée en base, secret jamais en clair dans AuthProvider", async () => {
     vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-new", kind: "oidc", name: "New", enabled: true, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    // Re-écriture des champs autogérés (redirect/discovery dérivés) post-création.
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-new", kind: "oidc", name: "New", enabled: true, config: {} } as never)
     const app = await buildApp()
     const res = await app.inject({
       method: "POST",
@@ -246,13 +250,15 @@ describe("Providers admin (owner) — CRUD", () => {
       id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
       config: { issuer: "https://idp.example.org", clientSecret: "k9988:iv:tag:data" },
     } as never)
-    vi.mocked(prisma.authProvider.update).mockImplementation((async () => ({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, config: {} })) as never)
+    vi.mocked(prisma.authProvider.update).mockImplementation((async () => ({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, config: {} })) as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     const app = await buildApp()
     const res = await app.inject({
       method: "PUT",
       url: "/api/auth/admin/providers/oidc-corp",
-      payload: { enabled: true, config: { issuer: "https://idp.example.org", clientId: "client-1", redirectUri: "https://sp.example.org/cb", clientSecret: "••••••••" } },
+      // Pas d'enabled : mutation de config seule — le garde-fou d'activation ne
+      // s'applique pas (état final inchangé = désactivé).
+      payload: { config: { issuer: "https://idp.example.org", clientId: "client-1", redirectUri: "https://sp.example.org/cb", clientSecret: "••••••••" } },
     })
     expect(res.statusCode).toBe(200)
     const call = vi.mocked(prisma.authProvider.update).mock.calls[0]?.[0] as { data: { config: Record<string, unknown> } }
@@ -268,10 +274,31 @@ describe("Providers admin (owner) — CRUD", () => {
     await app.close()
   })
 
-  it("PUT — enabled uniquement (toggle) réussit et change le statut sans toucher la config", async () => {
+  it("PUT — activation refusée si config stockée incomplète (garde-fou §5)", async () => {
+    // §5 : activer sans config valide = provider mort en prod. La config
+    // effective (stockée déchiffrée + delta) doit passer le schéma du kind.
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
       id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
       config: { issuer: "https://idp.example.org", clientSecret: "k9988:iv:tag:data" },
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { enabled: true },
+    })
+    expect(res.statusCode).toBe(400)
+    // Blob secret illisible (clé changée) → fail-closed, jamais 500.
+    expect(res.json().code).toBe("invalid_config")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — toggle enabled avec config EFFECTIVE valide → 200 sans toucher la config", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "client-1", redirectUri: "https://sp.example.org/cb" },
     } as never)
     vi.mocked(prisma.authProvider.update).mockResolvedValue({
       id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, config: {},
@@ -360,6 +387,9 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
       id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null, config: {},
     } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null, config: {},
+    } as never)
     const app = await buildApp()
     const res = await app.inject({
       method: "POST",
@@ -380,7 +410,8 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
   }
   const prevNodeEnv = process.env.NODE_ENV
   const OIDC_CONFIG = { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" }
-  const OIDC_ROW = { id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: {} }
+  // Provider PROVISIONNÉ (config effective valide) — activable par le garde-fou §5.
+  const OIDC_ROW = { id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: OIDC_CONFIG }
 
   afterAll(() => {
     process.env.NODE_ENV = prevNodeEnv
@@ -415,13 +446,16 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
       payload: { kind: "oidc", name: "NoDomain", enabled: false, config: OIDC_CONFIG },
     })
     expect(res.statusCode).toBe(201)
-    expect(mockSettingsService.get).not.toHaveBeenCalled()
+    // Lecture settings : résolution de la base publique pour les champs
+    // autogérés — indépendante du garde-fou domaine (géré côté assertDomain).
+    expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
     await app.close()
   })
 
   it("POST oidc actif — provider GLOBAL → domaine de DEFAULT_TENANT_ID requis", async () => {
     mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
     vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     const app = await buildApp()
     const res = await app.inject({
@@ -438,6 +472,7 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
   it("POST oidc actif — provider tenant-scoped → domaine DU TENANT requis (pas du défaut)", async () => {
     mockSettingsService.get.mockResolvedValue({ domain: "t1.example.com" })
     vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-t1", kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-t1", kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     const app = await buildApp()
     const res = await app.inject({
@@ -729,5 +764,248 @@ describe("Workflow d'approbation (owner)", () => {
     const res = await app.inject({ method: "POST", url: "/api/auth/admin/pendings/nope/reject", payload: {} })
     expect(res.statusCode).toBe(404)
     await app.close()
+  })
+})
+
+describe("Phase A rework — autogestion, sanitisation, activation gardée, prévol", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("POST oidc sans redirectUri → champs autogérés (callback + discovery) persistés", async () => {
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({
+      id: "oidc-auto", kind: "oidc", name: "Auto", enabled: false, tenantId: "t-1", config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: { kind: "oidc", name: "Auto", config: { issuer: "https://idp.example.org", clientId: "c" } },
+    })
+    expect(res.statusCode).toBe(201)
+    const call = vi.mocked(prisma.authProvider.update).mock.calls[0]?.[0] as { data: { config: Record<string, unknown> } }
+    expect(call.data.config.redirectUri).toBe("http://localhost:4000/api/auth/sso/oidc-auto/callback")
+    expect(call.data.config.discoveryUrl).toBe("https://idp.example.org/.well-known/openid-configuration")
+    await app.close()
+  })
+
+  it("POST oidc avec redirectUri EXPLICITE → override expert respecté (??=)", async () => {
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({
+      id: "oidc-manual", kind: "oidc", name: "Manual", enabled: false, tenantId: "t-1", config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oidc",
+        name: "Manual",
+        config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.custom.org/cb" },
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    const call = vi.mocked(prisma.authProvider.update).mock.calls[0]?.[0] as { data: { config: Record<string, unknown> } }
+    expect(call.data.config.redirectUri).toBe("https://sp.custom.org/cb")
+    await app.close()
+  })
+
+  it("POST — scopes vide ('') rejetée (sanitisation trim+min)", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oidc",
+        name: "Scopes vides",
+        config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb", scopes: "" },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("invalid_config")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST ldap — timeoutMs au-delà du plafond (120000) rejeté", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "ldap",
+        name: "LDAP lent",
+        config: { url: "ldap://dc.example.org", searchBase: "dc=example,dc=org", searchFilter: "(uid={{username}})", stableAttr: "uid", timeoutMs: 120000 },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("invalid_config")
+    await app.close()
+  })
+
+  it("POST ldap — clé inconnue dans tlsOptions rejetée (strict nested)", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "ldap",
+        name: "LDAP tls",
+        config: {
+          url: "ldap://dc.example.org",
+          searchBase: "dc=example,dc=org",
+          searchFilter: "(uid={{username}})",
+          stableAttr: "uid",
+          tlsOptions: { rejectUnauthorized: true, modeInconnu: 3 },
+        },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    await app.close()
+  })
+
+  it("POST saml — cert NON-PEM rejeté (garde-fou §5)", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "saml",
+        name: "SAML cassé",
+        config: { idpCert: "not-a-certificate", idpIssuer: "https://idp.example.org", entryPoint: "https://idp.example.org/sso" },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("invalid_config")
+    expect(res.json().details.idpCert).toBeDefined()
+    await app.close()
+  })
+
+  it("POST saml — cert X.509 PEM VALIDE (fixture) accepté", async () => {
+    const idpCert = readFileSync(path.join(__dirname, "fixtures", "saml", "keys", "idp-cert.pem"), "utf8")
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({
+      id: "saml-ok", kind: "saml", name: "SAML", enabled: false, tenantId: "t-1", config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({
+      id: "saml-ok", kind: "saml", name: "SAML", enabled: false, tenantId: "t-1", config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "saml",
+        name: "SAML",
+        config: { idpCert, idpIssuer: "https://idp.example.org", entryPoint: "https://idp.example.org/sso" },
+      },
+    })
+    expect(res.statusCode).toBe(201)
+    await app.close()
+  })
+
+  it("PUT saml — activer avec cert PEM invalide refusé (gate sur config effective)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "saml-bad", kind: "saml", name: "SAML", enabled: false, tenantId: "t-1",
+      config: { idpIssuer: "https://idp.example.org", idpCert: "corrompu-pas-pem", entryPoint: "https://idp.example.org/sso" },
+    } as never)
+    const app = await buildApp()
+    const res = await app.inject({ method: "PUT", url: "/api/auth/admin/providers/saml-bad", payload: { enabled: true } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("invalid_config")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST /preflight — config invalide → ok:false schemaValid:false, aucun probe", async () => {
+    vi.stubGlobal("fetch", vi.fn())
+    try {
+      const app = await buildApp()
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/admin/providers/preflight",
+        payload: { kind: "oidc", config: { issuer: "pas-une-url" } },
+      })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().ok).toBe(false)
+      expect(res.json().schemaValid).toBe(false)
+      expect(res.json().steps).toEqual([])
+      expect(fetch).not.toHaveBeenCalled()
+      await app.close()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("POST /preflight — oidc joignable → step discovery ok:true, ok global true", async () => {
+    const okResponse = () => new Response(JSON.stringify({ issuer: "https://idp.example.org" }), { status: 200 })
+    vi.stubGlobal("fetch", vi.fn(async () => okResponse()))
+    try {
+      const app = await buildApp()
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/admin/providers/preflight",
+        payload: {
+          kind: "oidc",
+          config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+        },
+      })
+      expect(res.json().schemaValid).toBe(true)
+      expect(res.json().ok).toBe(true)
+      expect(res.json().steps.find((s: { step: string }) => s.step === "discovery")).toMatchObject({ ok: true })
+      await app.close()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("POST /preflight — discovery injoignable → step ok:false, ok global false (wizard bloque)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 502 })))
+    try {
+      const app = await buildApp()
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/admin/providers/preflight",
+        payload: {
+          kind: "oidc",
+          config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+        },
+      })
+      expect(res.json().schemaValid).toBe(true)
+      expect(res.json().ok).toBe(false)
+      expect(res.json().steps.find((s: { step: string }) => s.step === "discovery")).toMatchObject({ ok: false })
+      await app.close()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("POST /preflight — oauth2 : chaque endpoint sondé indépendamment", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("ok", { status: 200 })))
+    try {
+      const app = await buildApp()
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/admin/providers/preflight",
+        payload: {
+          kind: "oauth2",
+          config: {
+            authorizationUri: "https://idp.example.org/authorize",
+            tokenUri: "https://idp.example.org/token",
+            userinfoUri: "https://idp.example.org/userinfo",
+            clientId: "c",
+            clientSecret: "s",
+            redirectUri: "https://sp.example.org/cb",
+          },
+        },
+      })
+      expect(res.json().ok).toBe(true)
+      const steps = res.json().steps as { step: string }[]
+      expect(steps.map((s) => s.step)).toEqual(["authorization_uri", "token_uri"])
+      await app.close()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

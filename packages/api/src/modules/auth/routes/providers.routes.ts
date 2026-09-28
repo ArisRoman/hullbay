@@ -20,7 +20,9 @@ import { z } from "zod"
 import { requireRole } from "../authorization/rbac"
 import { prisma } from "../../../lib/prisma"
 import { eventBus } from "../../../lib/event-bus"
-import { encryptObject, encryptProviderSecret } from "../secrets/secret-encryption-service"
+import { X509Certificate } from "node:crypto"
+import { encryptObject, encryptProviderSecret, decryptObject } from "../secrets/secret-encryption-service"
+import { autoManagedFields, defaultOidcDiscoveryUrl } from "../providers/provider-auto-config"
 import { SENSITIVE_FIELDS_BY_KIND } from "../registry/seeds"
 import { providerRegistry } from "../registry/provider-registry"
 import { AuthError, type ProviderKind } from "../providers/types"
@@ -77,12 +79,40 @@ function authErrorPayload(err: unknown) {
   return undefined
 }
 
+/** Probe HTTP bornée (5 s) — ne lève jamais : ok/message pour le prévol. */
+async function probeHttp(url: string): Promise<{ ok: boolean; message: string }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 5000)
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: "follow" })
+    return { ok: res.ok, message: `HTTP ${res.status}` }
+  } catch {
+    return { ok: false, message: "injoignable (timeout 5s)" }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function isPemCertificate(value: string): boolean {
+  if (!/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.test(value)) return false
+  try {
+    new X509Certificate(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const trimmedOptional = () => z.string().trim().min(1, "valeur vide ou espaces seuls interdits").optional()
+
 const oidcConfigSchema = z.object({
   issuer: z.string().url(),
-  clientId: z.string().min(1),
+  clientId: z.string().trim().min(1),
   clientSecret: z.string().optional(),
-  redirectUri: z.string().url(),
-  scopes: z.string().optional(),
+  // redirectUri est dérivé (hullbay) si absent : callback du flux SSO.
+  redirectUri: z.string().url().optional(),
+  scopes: trimmedOptional(),
+  // discoveryUrl dérivée depuis issuer si absente (issuer/.well-known...).
   discoveryUrl: z.string().url().optional(),
   jwksUri: z.string().url().optional(),
   acceptedClockSkewMs: z.number().int().positive().max(300000).optional(),
@@ -92,43 +122,45 @@ const oauth2ConfigSchema = z.object({
   authorizationUri: z.string().url(),
   tokenUri: z.string().url(),
   userinfoUri: z.string().url(),
-  clientId: z.string().min(1),
+  clientId: z.string().trim().min(1),
   clientSecret: z.string().optional(),
-  redirectUri: z.string().url(),
-  scopes: z.string().optional(),
-  groupAttr: z.string().optional(),
+  redirectUri: z.string().url().optional(),
+  scopes: trimmedOptional(),
+  groupAttr: trimmedOptional(),
 }).strict()
 
 const samlConfigSchema = z.object({
-  idpCert: z.string().min(1),
-  idpIssuer: z.string().min(1),
-  spIssuer: z.string().min(1),
+  // Certificat IdP obligatoirement un X.509 PEM valide (parse réel, pas une
+  // simple regex) — un cert corrompu rendait le provider silencieusement mort.
+  idpCert: z.string().trim().min(1).refine(isPemCertificate, "idpCert doit être un certificat X.509 PEM valide"),
+  idpIssuer: z.string().trim().min(1),
+  spIssuer: z.string().trim().min(1).optional(),
   entryPoint: z.string().url(),
-  callbackUrl: z.string().url(),
-  audience: z.string().optional(),
-  acceptedClockSkewMs: z.number().int().positive().optional(),
+  callbackUrl: z.string().url().optional(),
+  audience: trimmedOptional(),
+  acceptedClockSkewMs: z.number().int().positive().max(300000).optional(),
 }).strict()
 
 const ldapConfigSchema = z.object({
-  url: z.string().regex(/^ldaps?:\/\/.+/i, "url doit commencer par ldap:// ou ldaps://"),
+  url: z.string().trim().regex(/^ldaps?:\/\/.+/i, "url doit commencer par ldap:// ou ldaps://"),
   tlsOptions: z.object({
     rejectUnauthorized: z.boolean().optional(),
     ca: z.string().optional(),
-  }).optional(),
-  bindDn: z.string().optional(),
-  bindSecret: z.string().optional(),
-  searchBase: z.string().min(1),
-  searchFilter: z.string().min(1),
-  groupSearchBase: z.string().optional(),
-  groupFilter: z.string().optional(),
-  stableAttr: z.string().min(1),
+  }).strict().optional(),
+  bindDn: trimmedOptional(),
+  bindSecret: z.string().trim().optional(),
+  searchBase: z.string().trim().min(1),
+  searchFilter: z.string().trim().min(1),
+  groupSearchBase: trimmedOptional(),
+  groupFilter: trimmedOptional(),
+  stableAttr: z.string().trim().min(1),
   attrMap: z.object({
-    username: z.string().optional(),
-    email: z.string().optional(),
-    name: z.string().optional(),
-    groups: z.string().optional(),
-  }).optional(),
-  timeoutMs: z.number().int().positive().optional(),
+    username: trimmedOptional(),
+    email: trimmedOptional(),
+    name: trimmedOptional(),
+    groups: trimmedOptional(),
+  }).strict().optional(),
+  timeoutMs: z.number().int().positive().max(60000).optional(),
   handleReferrals: z.boolean().optional(),
 }).strict()
 
@@ -243,7 +275,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       try {
         // Garde-fou  : contrôle AVANT persistance sur la portée cible.
         await assertDomainConfigured(body.kind, body.enabled, body.tenantId ?? null)
-        const row = await prisma.authProvider.create({
+        let row = await prisma.authProvider.create({
           data: {
             kind: body.kind,
             name: body.name,
@@ -253,6 +285,14 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
             ...(body.id ? { id: body.id } : {}),
           },
         })
+        // Champs gérés par Hullbay (redirect/callback/discovery/spIssuer) :
+        // posés en base quand absents, résolus depuis le domaine public.
+        const auto = await autoManagedFields(body.kind, row.id, body.tenantId ?? null, parsed.data)
+        if (Object.keys(auto).length > 0) {
+          const withAuto = { ...parsed.data, ...auto }
+          const autoConfig = encryptObject(withAuto, SENSITIVE_FIELDS_BY_KIND[body.kind])
+          row = await prisma.authProvider.update({ where: { id: row.id }, data: { config: autoConfig as never } })
+        }
         await providerRegistry.loadFromDb()
         await eventBus.emit("auth.provider.created", { providerId: row.id, kind: row.kind })
         return reply.code(201).send(dto(row))
@@ -338,6 +378,8 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       const schema = kindToSchema(row.kind)
       const currentConfig = (row.config as Record<string, unknown>) ?? {}
       let encryptedConfig = currentConfig
+      // Delta fourni (config live du PUT) — null si la requête n'en porte pas.
+      let parsedData: Record<string, unknown> | null = null
       if (body.config !== undefined) {
         if (!schema) {
           return reply.code(400).send({ error: "unsupported_kind", message: `kind ${row.kind} n’est pas gérable via l’API`, code: "unsupported_kind" })
@@ -347,6 +389,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
           const details = parsed.error.flatten().fieldErrors
           return reply.code(400).send({ error: "invalid_config", message: "configuration invalide", code: "invalid_config", details })
         }
+        parsedData = parsed.data
         // Fusionne avec la config existante. Le marqueur sentinelle signifie
         // "conserver la valeur actuelle" : les champs sensibles déjà chiffrés
         // en base restent intacts (pas de double-chiffrement — decryptObject
@@ -358,7 +401,51 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
           if (value === SECRET_MASK) continue
           merged[key] = sensitive.includes(key) ? encryptProviderSecret(value as string) : value
         }
+        // Champs gérés par Hullbay résolus depuis le domaine public (override
+        // utilisateur toujours respecté : `??=`).
+        const auto = await autoManagedFields(row.kind, id, body.tenantId !== undefined ? body.tenantId : row.tenantId, merged)
+        Object.assign(merged, auto)
         encryptedConfig = merged
+      }
+
+      // Garde-fou §gestion : un provider ne peut PAS être activé si sa config
+      // EFFECTIVE (config stockée déchiffrée + delta fourni) est invalide.
+      // "••••••••" sur un secret = conserver le stocké (jamais un placeholder).
+      // Sans ce garde-fou, un toggle activait un provider mort en production.
+      if (finalEnabled && row.kind !== "local" && schema) {
+        const sensitive = SENSITIVE_FIELDS_BY_KIND[row.kind as ProviderKind] ?? []
+        const cleanProvided =
+          body.config === undefined ? {} : Object.fromEntries(Object.entries(parsedData ?? {}).filter(([, v]) => v !== SECRET_MASK))
+        // Blob secret illisible (clé tournée entre-temps…) → refuse d'activer :
+        // on préfère fermer que d'activer un provider dont on ne peut vérifier
+        // la config effective.
+        let effective: Record<string, unknown>
+        try {
+          effective = { ...decryptObject(currentConfig, sensitive), ...cleanProvided }
+        } catch {
+          return reply.code(400).send({
+            error: "invalid_config",
+            message: "activation refusée : secret stocké illisible (clé de chiffrement probablement changée)",
+            code: "invalid_config",
+          })
+        }
+        const gate = schema.safeParse(effective)
+        if (!gate.success) {
+          return reply.code(400).send({
+            error: "invalid_config",
+            message: "activation refusée : configuration incomplète ou invalide",
+            code: "invalid_config",
+            details: gate.error.flatten().fieldErrors,
+          })
+        }
+        if (row.kind === "oauth2" && !effective.clientSecret) {
+          return reply.code(400).send({
+            error: "invalid_config",
+            message: "OAuth2 : clientSecret requis pour activer (flux confidentiel)",
+            code: "invalid_config",
+            details: { clientSecret: ["requis — le token endpoint exige client_secret (flux confidentiel)"] },
+          })
+        }
       }
 
       const updated = await prisma.authProvider.update({
@@ -471,25 +558,20 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         })
       }
       try {
-        // Tente la joignabilité OIDC (discovery) si renseignée — annulé après 5 s.
+        // Tente la joignabilité OIDC (discovery) si renseignée ou dérivable
+        // depuis issuer — annulé après 5 s.
         let connectivity: string | null = null
-        if (row.kind === "oidc" && typeof current.discoveryUrl === "string") {
-          const controller = new AbortController()
-          const timer = setTimeout(() => controller.abort(), 5000)
-          try {
-            const res = await fetch(current.discoveryUrl, { signal: controller.signal })
-            if (res.ok) connectivity = `discovery joignable (HTTP ${res.status})`
-            else connectivity = `discovery répond HTTP ${res.status}`
-          } catch {
-            connectivity = "discovery injoignable"
-          } finally {
-            clearTimeout(timer)
-          }
+        const discoveryUrl =
+          typeof current.discoveryUrl === "string"
+            ? current.discoveryUrl
+            : defaultOidcDiscoveryUrl(typeof current.issuer === "string" ? current.issuer : undefined)
+        if (row.kind === "oidc" && discoveryUrl) {
+          const probe = await probeHttp(discoveryUrl)
+          connectivity = probe.ok ? `discovery joignable (${probe.message})` : `discovery ${probe.message}`
         } else if (row.kind === "ldap") {
           const { createLdapProvider } = await import("../providers/ldap/ldap-provider")
           // La config stockée est chiffrée : on la déchiffre avant de construire
           // l'adapter (lui ne déchiffre plus, cf. double-déchiffrement).
-          const { decryptObject } = await import("../secrets/secret-encryption-service")
           const decrypted = decryptObject(current, SENSITIVE_FIELDS_BY_KIND["ldap"] ?? [])
           const ldapProvider = createLdapProvider({ ...(decrypted as Record<string, unknown> as any), id: row.id })
           const testRes = await ldapProvider.testConnection()
@@ -511,6 +593,90 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
           message: (err as Error)?.message || "serveur LDAP injoignable",
           code: "ldap_unreachable",
         })
+      }
+    },
+  )
+
+  // Prévol (wizard) : valide une config À L'ÉCRAN, sans persister, et sonde la
+  // joignabilité de chaque endpoint côté IdP. Ne renvoie jamais de secret.
+  app.post(
+    "/api/auth/admin/providers/preflight",
+    {
+      ...owner,
+      schema: {
+        body: z.object({
+          kind: z.enum(["oidc", "oauth2", "saml", "ldap"]),
+          config: z.record(z.string(), z.any()).default({}),
+        }),
+        tags: ["auth"],
+        summary: "Prévol de config provider (owner) : validation + joignabilité étape par étape",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (req) => {
+      const body = z.object({ kind: z.enum(["oidc", "oauth2", "saml", "ldap"]), config: z.record(z.string(), z.any()).default({}) }).parse(req.body)
+      const schema = CONFIG_SCHEMAS[body.kind]
+      const check = schema.safeParse(body.config)
+      if (!check.success) {
+        return {
+          ok: false,
+          schemaValid: false,
+          steps: [],
+          details: check.error.flatten().fieldErrors,
+        }
+      }
+      const cfg = check.data as Record<string, unknown>
+      const steps: { step: string; ok: boolean; message: string; latencyMs?: number }[] = []
+
+      if (body.kind === "oidc") {
+        const discoveryUrl =
+          typeof cfg.discoveryUrl === "string"
+            ? cfg.discoveryUrl
+            : defaultOidcDiscoveryUrl(typeof cfg.issuer === "string" ? cfg.issuer : undefined)
+        if (discoveryUrl) {
+          const t0 = Date.now()
+          const probe = await probeHttp(discoveryUrl)
+          let message = probe.ok ? `discovery joignable (${probe.message})` : `discovery ${probe.message}`
+          if (probe.ok) {
+            try {
+              const doc = (await (await fetch(discoveryUrl)).json()) as { issuer?: string }
+              if (doc.issuer && doc.issuer !== cfg.issuer) message += " — issuer ne correspond pas au discovery"
+            } catch {
+              message += " — réponse non-JSON"
+            }
+          }
+          steps.push({ step: "discovery", ok: probe.ok, message, latencyMs: Date.now() - t0 })
+        }
+      } else if (body.kind === "oauth2") {
+        for (const [step, url] of [
+          ["authorization_uri", cfg.authorizationUri],
+          ["token_uri", cfg.tokenUri],
+        ] as const) {
+          if (typeof url !== "string") continue
+          const label = step === "authorization_uri" ? "authorizationUri" : "tokenUri"
+          const t0 = Date.now()
+          const probe = await probeHttp(url)
+          const message = probe.ok ? `${label} joignable (${probe.message})` : `${label} ${probe.message}`
+          steps.push({ step, ok: probe.ok, message, latencyMs: Date.now() - t0 })
+        }
+      } else if (body.kind === "saml") {
+        if (typeof cfg.entryPoint === "string") {
+          const t0 = Date.now()
+          const probe = await probeHttp(cfg.entryPoint)
+          steps.push({ step: "entry_point", ok: probe.ok, message: probe.ok ? `entryPoint joignable (${probe.message})` : `entryPoint ${probe.message}`, latencyMs: Date.now() - t0 })
+        }
+      } else if (body.kind === "ldap") {
+        const { createLdapProvider } = await import("../providers/ldap/ldap-provider")
+        const t0 = Date.now()
+        const ldapProvider = createLdapProvider({ ...(cfg as Record<string, unknown> as any), id: "preflight" })
+        const bindRes = await ldapProvider.testConnection()
+        steps.push({ step: "bind", ok: bindRes.ok, message: bindRes.ok ? "bind LDAP réussi" : "bind LDAP échoué", latencyMs: Date.now() - t0 })
+      }
+
+      return {
+        ok: steps.length === 0 ? true : steps.every((s) => s.ok),
+        schemaValid: true,
+        steps,
       }
     },
   )
