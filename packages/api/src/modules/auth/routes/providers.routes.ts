@@ -10,7 +10,17 @@
  * - le marqueur "••••••••" envoyé en PUT sur un champ sensible signifie
  *   "conserver la valeur actuelle" (jamais d'écrasement par un placeholder) ;
  * - schema zod par kind (whitelist stricte : toute clé inconnue rejetée) ;
- * - anti-énumération : id inconnu → 404 uniforme.
+ * - anti-énumération : id inconnu → 404 uniforme ;
+ * - isolation tenant : le tenant d'une mutation est TOUJOURS dérivé du
+ *   contexte authentifié (reqTenant), jamais d'un champ tenantId du body
+ *   (présence → 400 tenant_id_not_allowed). La portée du provider est
+ *   immuable après création. La CRÉATION n'est possible que depuis le tenant
+ *   défaut (registry SSO partagé ne résout que les providers globaux/défaut)
+ *   et produit un provider GLOBAL (tenantId null) ; un autre tenant reçoit
+ *   400 tenant_providers_not_supported au lieu d'un provider fantôme ;
+ * - anti-lockout résolu selon la portée du provider (jamais globale) :
+ *   tenant-scoped → autres providers actifs du MÊME tenant ; global →
+ *   autres providers actifs globaux.
  *
  * Chaque mutation re-hydrate le ProviderRegistry depuis la DB (loadFromDb).
  */
@@ -69,6 +79,27 @@ async function assertDomainConfigured(kind: string, finalEnabled: boolean, scope
       400,
     )
   }
+}
+
+/**
+ * Anti-lockout SCOPÉ : compte les providers actifs SUR LA MÊME PORTÉE que la
+ * cible — jamais à l'échelle globale (un provider d'un autre tenant ne doit
+ * pas empêcher/permettre la désactivation du dernier provider d'un tenant).
+ *   - tenant-scoped (tenantId non null) → mêmes tenants uniquement ;
+ *   - global (tenantId null) → les globaux uniquement.
+ */
+type ProviderCountDb = {
+  authProvider: { count: (args: any) => Promise<number> }
+}
+
+async function activeProvidersCountExcept(
+  id: string,
+  scope: string | null,
+  db: ProviderCountDb = prisma,
+): Promise<number> {
+  return db.authProvider.count({
+    where: { id: { not: id }, enabled: true, tenantId: scope },
+  })
 }
 
 /** Réponse d'erreur AuthError compacte (400 + code machine). */
@@ -234,6 +265,11 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     name: z.string().min(1, "nom requis").max(120),
     enabled: z.boolean().default(false),
     config: z.record(z.string(), z.any()).default({}),
+    // Déclaré UNIQUEMENT pour être rejeté : le validator Fastify
+    // (type-provider-zod) retire les clés inconnues du body avant le handler —
+    // cette clé déclarée survit à la validation, ce qui permet de lever
+    // tenant_id_not_allowed. La retirer (ou .strict()) rendrait le tenantId
+    // client silencieusement ignoré au lieu de rejeté : attention si modifié.
     tenantId: z.string().min(1).nullable().optional(),
   })
 
@@ -251,6 +287,15 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     },
     async (req, reply) => {
       const body = createBody.parse(req.body)
+      // Isolation tenant : la portée vient du contexte authentifié, JAMAIS du
+      // body. Un tenantId envoyé (= B ou null) est refusé explicitement.
+      if (body.tenantId !== undefined) {
+        return reply.code(400).send({
+          error: "tenant_id_not_allowed",
+          message: "le tenant du provider est dérivé du contexte authentifié (non modifiable via le body)",
+          code: "tenant_id_not_allowed",
+        })
+      }
       const schema = kindToSchema(body.kind)
       if (!schema) {
         return reply.code(400).send({ error: "unsupported_kind", message: `kind ${body.kind} n’est pas gérable via l’API`, code: "unsupported_kind" })
@@ -272,22 +317,35 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         })
       }
       const config = encryptObject(parsed.data, SENSITIVE_FIELDS_BY_KIND[body.kind])
+      // Isolation tenant : le registre SSO partagé ne résout que les providers
+      // globaux (tenantId null) et ceux du tenant défaut (loadFromDb). Un
+      // provider créé pour un autre tenant serait un fantôme : 201 en base,
+      // 404 à chaque login SSO. La création est donc réservée au tenant défaut
+      // et produit toujours un provider GLOBAL.
+      const scope = reqTenant(req)
+      if (scope !== DEFAULT_TENANT_ID) {
+        return reply.code(400).send({
+          error: "tenant_providers_not_supported",
+          message: "la création de providers n'est possible que depuis le tenant défaut (provider global)",
+          code: "tenant_providers_not_supported",
+        })
+      }
       try {
-        // Garde-fou  : contrôle AVANT persistance sur la portée cible.
-        await assertDomainConfigured(body.kind, body.enabled, body.tenantId ?? null)
+        // Garde-fou : contrôle AVANT persistance sur la portée cible (global).
+        await assertDomainConfigured(body.kind, body.enabled, null)
         let row = await prisma.authProvider.create({
           data: {
             kind: body.kind,
             name: body.name,
             enabled: body.enabled,
             config: config as never,
-            tenantId: body.tenantId ?? null,
+            tenantId: null,
             ...(body.id ? { id: body.id } : {}),
           },
         })
         // Champs gérés par Hullbay (redirect/callback/discovery/spIssuer) :
         // posés en base quand absents, résolus depuis le domaine public.
-        const auto = await autoManagedFields(body.kind, row.id, body.tenantId ?? null, parsed.data)
+        const auto = await autoManagedFields(body.kind, row.id, null, parsed.data)
         if (Object.keys(auto).length > 0) {
           const withAuto = { ...parsed.data, ...auto }
           const autoConfig = encryptObject(withAuto, SENSITIVE_FIELDS_BY_KIND[body.kind])
@@ -311,6 +369,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     name: z.string().min(1).max(120).optional(),
     enabled: z.boolean().optional(),
     config: z.record(z.string(), z.any()).optional(),
+    // Déclaré UNIQUEMENT pour être rejeté (re-scope interdit), voir createBody.
     tenantId: z.string().min(1).nullable().optional(),
   })
 
@@ -329,6 +388,15 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string }
       const body = updateBody.parse(req.body)
+      // Isolation tenant : le tenant n'est PAS modifiable (re-scope = opération
+      // admin dédiée, inexistante). Présence de tenantId → rejet explicite.
+      if (body.tenantId !== undefined) {
+        return reply.code(400).send({
+          error: "tenant_id_not_allowed",
+          message: "le tenant du provider n'est pas modifiable (dérivé du contexte authentifié)",
+          code: "tenant_id_not_allowed",
+        })
+      }
       const row = await prisma.authProvider.findUnique({ where: { id } })
       if (!row) return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
 
@@ -343,36 +411,16 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: "provider_not_found", message: "provider introuvable", code: "provider_not_found" })
       }
 
-// Garde-fou: état FINAL (PUT partiel) + portée réelle du provider.
-      //  ne pas tester uniquement body.enabled — un PUT partiel ne doit
-      //  jamais conserver/atteindre un état invalide.
-      // Portée = tenantId FINAL du provider : un re-scope explicite vers
-      // global (tenantId: null) est évalué contre DEFAULT_TENANT_ID, jamais
-      // contre l'ancien tenant (?? avalerait le null et laisserait passer).
+// Garde-fou : état FINAL (PUT partiel) + portée réelle du provider.
+      // Ne pas tester uniquement body.enabled — un PUT partiel ne doit jamais
+      // conserver/atteindre un état invalide. Portée = tenantId du provider
+      // (immuable ici) — jamais un re-scope.
       const finalEnabled = body.enabled !== undefined ? body.enabled : row.enabled
+      const scope = row.tenantId
       try {
-        await assertDomainConfigured(
-          row.kind,
-          finalEnabled,
-          body.tenantId !== undefined ? body.tenantId : row.tenantId,
-        )
+        await assertDomainConfigured(row.kind, finalEnabled, scope)
       } catch (err) {
         return reply.code(err instanceof AuthError ? err.status : 400).send(authErrorPayload(err))
-      }
-
-      // Garde anti-lockout : on ne peut jamais désactiver le dernier provider
-      // actif (plus aucun moyen de connecter un compte ⇒ verrouillage total).
-      if (body.enabled === false && row.enabled) {
-        const otherEnabled = await prisma.authProvider.count({
-          where: { id: { not: id }, enabled: true },
-        })
-        if (otherEnabled === 0) {
-          return reply.code(400).send({
-            error: "cannot_disable_last_provider",
-            message: "au moins un provider doit rester actif",
-            code: "cannot_disable_last_provider",
-          })
-        }
       }
 
       const schema = kindToSchema(row.kind)
@@ -403,7 +451,7 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         }
         // Champs gérés par Hullbay résolus depuis le domaine public (override
         // utilisateur toujours respecté : `??=`).
-        const auto = await autoManagedFields(row.kind, id, body.tenantId !== undefined ? body.tenantId : row.tenantId, merged)
+        const auto = await autoManagedFields(row.kind, id, scope, merged)
         Object.assign(merged, auto)
         encryptedConfig = merged
       }
@@ -448,15 +496,33 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
         }
       }
 
-      const updated = await prisma.authProvider.update({
-        where: { id },
-        data: {
-          ...(body.name !== undefined ? { name: body.name } : {}),
-          ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-          ...(body.tenantId !== undefined ? { tenantId: body.tenantId } : {}),
-          ...(body.config !== undefined ? { config: encryptedConfig as never } : {}),
-        },
-      })
+      // Garde anti-lockout scoped : on ne peut jamais désactiver le dernier
+      // provider actif DE LA PORTÉE (les providers d'autres tenants ne
+      // comptent pas, pas plus que les globaux pour une portée tenant).
+      // Plaquée dans la MÊME transaction que l'update : pas de TOCTOU entre
+      // le count et la mutation (2 requêtes concurrentes ne peuvent plus
+      // toutes deux croire qu'un autre provider reste actif).
+      const updateData = {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.config !== undefined ? { config: encryptedConfig as never } : {}),
+      }
+      let updated
+      try {
+        updated = await prisma.$transaction(async (tx) => {
+          if (body.enabled === false && row.enabled) {
+            const otherEnabled = await activeProvidersCountExcept(id, scope, tx)
+            if (otherEnabled === 0) {
+              throw new AuthError("cannot_disable_last_provider", "au moins un provider doit rester actif", 400)
+            }
+          }
+          return tx.authProvider.update({ where: { id }, data: updateData })
+        })
+      } catch (err) {
+        const payload = authErrorPayload(err)
+        if (payload) return reply.code(err instanceof AuthError ? err.status : 400).send(payload)
+        throw err
+      }
       await providerRegistry.loadFromDb()
       await eventBus.emit("auth.provider.updated", { providerId: updated.id, kind: updated.kind })
       return dto(updated)
@@ -488,31 +554,32 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       if (row.id === "local") {
         return reply.code(400).send({ error: "cannot_delete_local_provider", message: "le provider local ne peut pas être supprimé", code: "cannot_delete_local_provider" })
       }
-      if (row.enabled) {
-        const otherEnabled = await prisma.authProvider.count({
-          where: { id: { not: id }, enabled: true },
+      // Suppression atomique : garde anti-lockout scoped + comptes d'identités
+      // et pendings + delete dans la MÊME transaction — pas de TOCTOU (2
+      // suppressions concurrentes du dernier provider ne peuvent plus passer).
+      try {
+        await prisma.$transaction(async (tx) => {
+          if (row.enabled) {
+            const otherEnabled = await activeProvidersCountExcept(id, row.tenantId, tx)
+            if (otherEnabled === 0) {
+              throw new AuthError("cannot_delete_last_provider", "au moins un provider doit rester actif", 400)
+            }
+          }
+          const identities = await tx.authIdentity.count({ where: { providerId: id } })
+          if (identities > 0) {
+            throw new AuthError("provider_in_use", `provider utilisé par ${identities} identité(s)`, 409)
+          }
+          const pendings = await tx.pendingIdentity.count({ where: { providerId: id } })
+          if (pendings > 0) {
+            throw new AuthError("provider_pendings_exist", "des approbations en attente référencent ce provider", 409)
+          }
+          await tx.authProvider.delete({ where: { id } })
         })
-        if (otherEnabled === 0) {
-          return reply.code(400).send({
-            error: "cannot_delete_last_provider",
-            message: "au moins un provider doit rester actif",
-            code: "cannot_delete_last_provider",
-          })
-        }
+      } catch (err) {
+        const payload = authErrorPayload(err)
+        if (payload) return reply.code(err instanceof AuthError ? err.status : 400).send(payload)
+        throw err
       }
-      const identities = await prisma.authIdentity.count({ where: { providerId: id } })
-      if (identities > 0) {
-        return reply.code(409).send({
-          error: "provider_in_use",
-          message: `provider utilisé par ${identities} identité(s)`,
-          code: "provider_in_use",
-        })
-      }
-      const pendings = await prisma.pendingIdentity.count({ where: { providerId: id } })
-      if (pendings > 0) {
-        return reply.code(409).send({ error: "provider_pendings_exist", message: "des approbations en attente référencent ce provider", code: "provider_pendings_exist" })
-      }
-      await prisma.authProvider.delete({ where: { id } })
       await providerRegistry.loadFromDb()
       await eventBus.emit("auth.provider.deleted", { providerId: id })
       return reply.code(204).send()

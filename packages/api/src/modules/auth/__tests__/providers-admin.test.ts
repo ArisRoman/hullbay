@@ -31,20 +31,18 @@ vi.mock("../../../lib/prisma", () => {
   }
   const tenant = { findUnique: vi.fn() }
   const authIdentity = { count: vi.fn(), create: vi.fn() }
-  const pendingIdentity = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn() }
+  const pendingIdentity = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), count: vi.fn() }
   const user = { findUnique: vi.fn(), create: vi.fn() }
   const membership = { upsert: vi.fn() }
   const auditLog = { create: vi.fn(() => Promise.resolve({ id: "audit-1" })) }
+  // Transaction par défaut : délègue au MÊME client mocké (count/update/delete
+  // redirigés vers les mêmes vi.fn). Les tests du workflow d'approbation la
+  // remplacent par leur propre tx (voir txMock) — non affectés.
+  const client = { authProvider, tenant, authIdentity, pendingIdentity, user, membership, auditLog }
   return {
     prisma: {
-      authProvider,
-      tenant,
-      authIdentity,
-      pendingIdentity,
-      user,
-      membership,
-      auditLog,
-      $transaction: vi.fn(),
+      ...client,
+      $transaction: vi.fn(async (fn: (t: unknown) => Promise<unknown>) => fn(client)),
     },
   }
 })
@@ -73,7 +71,7 @@ const PENDING_ALICE = {
   status: "pending",
 }
 
-async function buildApp(role: "owner" | "operator" = "owner"): Promise<FastifyInstance> {
+async function buildApp(role: "owner" | "operator" = "owner", reqTenant: string = "t-1"): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
   app.setValidatorCompiler(validatorCompiler)
   app.setSerializerCompiler(serializerCompiler)
@@ -81,8 +79,8 @@ async function buildApp(role: "owner" | "operator" = "owner"): Promise<FastifyIn
     const r = req as FastifyRequest & { user?: unknown; tenantId?: string }
     r.user = { sub: "u-admin", role, mfaEnabled: true }
     // Tenant effectif posé par la garde en prod (claim/header). En harnais,
-    // on simule l'acteur owner appartenant au tenant "t-1".
-    r.tenantId = "t-1"
+    // on simule l'acteur owner appartenant au tenant demandé.
+    r.tenantId = reqTenant
   })
   await registerProvidersRoutes(app)
   await registerPendingRoutes(app)
@@ -144,7 +142,8 @@ describe("Providers admin (owner) — CRUD", () => {
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     // Re-écriture des champs autogérés (redirect/discovery dérivés) post-création.
     vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-new", kind: "oidc", name: "New", enabled: true, config: {} } as never)
-    const app = await buildApp()
+    // POST n'est possible que depuis le tenant défaut (provider global).
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -156,16 +155,18 @@ describe("Providers admin (owner) — CRUD", () => {
       },
     })
     expect(res.statusCode).toBe(201)
-    const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { config: Record<string, unknown> } }
+    const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { config: Record<string, unknown>; tenantId: string | null } }
     const stored = call.data.config as Record<string, unknown>
     expect(stored.clientSecret).not.toBe("super-secret")
     expect(String(stored.clientSecret)).toContain(":")
     expect(JSON.stringify(stored)).not.toContain("super-secret")
+    // Création depuis le tenant défaut → provider GLOBAL (tenantId null).
+    expect(call.data.tenantId).toBeNull()
     await app.close()
   })
 
   it("POST — config avec clé inconnue rejetée (whitelist zod, anti-injection)", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -181,7 +182,7 @@ describe("Providers admin (owner) — CRUD", () => {
   })
 
   it("POST oauth2 — clientSecret OBLIGATOIRE à la création (bug provider sans secret)", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -207,7 +208,7 @@ describe("Providers admin (owner) — CRUD", () => {
   it("POST oauth2 — avec clientSecret → 201, secret chiffré en base (jamais en clair)", async () => {
     vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oauth2-new", kind: "oauth2", name: "New", enabled: true, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -235,7 +236,7 @@ describe("Providers admin (owner) — CRUD", () => {
   })
 
   it("POST — kind non géré (ldap) → 400", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -382,24 +383,281 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
     await app.close()
   })
 
-  it("POST — sans tenantId explicite → provider global (tenantId null) dans le dto", async () => {
-    vi.mocked(prisma.authProvider.create).mockResolvedValue({
-      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null, config: {},
+  it("PUT — provider GLOBAL → mutable uniquement depuis le tenant défaut (t-1 → 404)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null,
+      config: { issuer: "https://idp.example.org", clientId: "c" },
     } as never)
-    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    vi.mocked(prisma.authProvider.update).mockResolvedValue({
-      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null, config: {},
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-global",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("DELETE — provider GLOBAL → mutable uniquement depuis le tenant défaut (t-1 → 404)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null,
     } as never)
+    const app = await buildApp()
+    const res = await app.inject({ method: "DELETE", url: "/api/auth/admin/providers/oidc-global" })
+    expect(res.statusCode).toBe(404)
+    expect(prisma.authProvider.delete).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST /test — provider GLOBAL invisible depuis un tenant non-défaut (t-1 → 404)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null,
+      config: { issuer: "https://idp.example.org", clientId: "c" },
+    } as never)
+    const app = await buildApp()
+    const res = await app.inject({ method: "POST", url: "/api/auth/admin/providers/oidc-global/test" })
+    expect(res.statusCode).toBe(404)
+    await app.close()
+  })
+
+  it("POST — tenant non-défaut (t-1) → 400 tenant_providers_not_supported, RIEN persisté", async () => {
+    // Le registre SSO partagé ne résout que les providers globaux ou du tenant
+    // défaut : créer pour un autre tenant produirait un provider fantôme (201
+    // en base, 404 à chaque login). Refus explicite → jamais de row orpheline.
     const app = await buildApp()
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
-      payload: { kind: "oidc", name: "Global", enabled: true, config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" } },
+      payload: { kind: "oidc", name: "T1", enabled: true, config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" } },
     })
-    expect(res.statusCode).toBe(201)
-    const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { tenantId: string | null } }
-    expect(call.data.tenantId).toBeNull()
-    expect(res.json().tenantId).toBeNull()
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_providers_not_supported")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    // Rejet avant le garde-fou domaine : aucune lecture de Settings.
+    expect(mockSettingsService.get).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST — tenantId='tenant-other' dans le body → 400 tenant_id_not_allowed, rien persisté", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oidc", name: "Squatteur", enabled: false,
+        tenantId: "tenant-other",
+        config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_id_not_allowed")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("POST — tenantId=null dans le body → 400 tenant_id_not_allowed (création globale interdite)", async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/admin/providers",
+      payload: {
+        kind: "oidc", name: "Global malgré moi", enabled: false, tenantId: null,
+        config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_id_not_allowed")
+    expect(prisma.authProvider.create).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — tenantId='tenant-other' dans le body → 400 tenant_id_not_allowed, update non appelé", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { tenantId: "tenant-other" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_id_not_allowed")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — tenantId=null dans le body → 400 tenant_id_not_allowed (re-scope global interdit)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { tenantId: null },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_id_not_allowed")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — tenantId='t-1' (même tenant) dans le body → 400 : le tenant n'est PAS modifiable", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-corp",
+      payload: { tenantId: "t-1" },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("tenant_id_not_allowed")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — désactivation du dernier provider DU TENANT refusée : un provider actif d'un AUTRE tenant ne compte pas", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    // Aucun autre provider actif du tenant t-1 (le provider B EST actif, mais
+    // il appartient au tenant tenant-other).
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(0 as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-a",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("cannot_disable_last_provider")
+    // Le count est bien scopé au tenant du provider — jamais global.
+    expect(prisma.authProvider.count).toHaveBeenCalledWith({
+      where: { id: { not: "oidc-a" }, enabled: true, tenantId: "t-1" },
+    })
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    // Garde plaquée en transaction avec la mutation (anti-TOCTOU) : le refus
+    // est levé DANS $transaction, pas par un count hors-ligne.
+    expect(prisma.$transaction).toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — désactivation possible si un autre provider DU MÊME TENANT reste actif", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(1 as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: false, tenantId: "t-1", config: {},
+    } as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-a",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(prisma.authProvider.count).toHaveBeenCalledWith({
+      where: { id: { not: "oidc-a" }, enabled: true, tenantId: "t-1" },
+    })
+    await app.close()
+  })
+
+  it("PUT — désactivation du dernier provider du tenant refusée MÊME SI un provider GLOBAL est actif", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1",
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    // Le count est tenant-scoped : le provider global B actif (tenantId null)
+    // est exclu → count 0 → refus.
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(0 as never)
+    const app = await buildApp()
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-a",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("cannot_disable_last_provider")
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("DELETE — dernier provider du tenant → 400 cannot_delete_last_provider (count scopé tenant)", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1",
+    } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(0 as never)
+    const app = await buildApp()
+    const res = await app.inject({ method: "DELETE", url: "/api/auth/admin/providers/oidc-a" })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("cannot_delete_last_provider")
+    expect(prisma.authProvider.count).toHaveBeenCalledWith({
+      where: { id: { not: "oidc-a" }, enabled: true, tenantId: "t-1" },
+    })
+    expect(prisma.authProvider.delete).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("DELETE — autorisé si un autre provider du MÊME tenant est actif", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1",
+    } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(1 as never)
+    vi.mocked(prisma.authIdentity.count).mockResolvedValue(0 as never)
+    vi.mocked(prisma.pendingIdentity.count).mockResolvedValue(0 as never)
+    vi.mocked(prisma.authProvider.delete).mockResolvedValue({} as never)
+    const app = await buildApp()
+    const res = await app.inject({ method: "DELETE", url: "/api/auth/admin/providers/oidc-a" })
+    expect(res.statusCode).toBe(204)
+    expect(prisma.authProvider.delete).toHaveBeenCalledWith({ where: { id: "oidc-a" } })
+    // Garde + comptes + delete atomiques (anti-TOCTOU).
+    expect(prisma.$transaction).toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("PUT — règle GLOBALE : désactivation du dernier provider global (tenant défaut) refusée", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null,
+      config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+    } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(0 as never)
+    const app = await buildApp("owner", "tenant-default")
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-global",
+      payload: { enabled: false },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("cannot_disable_last_provider")
+    // Règle globale : count parmi les globaux uniquement.
+    expect(prisma.authProvider.count).toHaveBeenCalledWith({
+      where: { id: { not: "oidc-global" }, enabled: true, tenantId: null },
+    })
+    expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it("DELETE — règle GLOBALE : dernier provider global refusé", async () => {
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null,
+    } as never)
+    vi.mocked(prisma.authProvider.count).mockResolvedValue(0 as never)
+    const app = await buildApp("owner", "tenant-default")
+    const res = await app.inject({ method: "DELETE", url: "/api/auth/admin/providers/oidc-global" })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe("cannot_delete_last_provider")
+    expect(prisma.authProvider.delete).not.toHaveBeenCalled()
     await app.close()
   })
 })
@@ -424,7 +682,7 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
 
   it("POST oidc actif sans domaine → 400 domain_not_configured, RIEN persisté", async () => {
     mockSettingsService.get.mockResolvedValue({ domain: null })
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -437,9 +695,9 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
   })
 
   it("POST oidc désactivé sans domaine → 201 (état inerte autorisé)", async () => {
-    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: false, tenantId: null, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -447,48 +705,55 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
     })
     expect(res.statusCode).toBe(201)
     // Lecture settings : résolution de la base publique pour les champs
-    // autogérés — indépendante du garde-fou domaine (géré côté assertDomain).
+    // autogérés — portée = provider créé (GLOBAL), donc tenant défaut.
     expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
     await app.close()
   })
 
-  it("POST oidc actif — provider GLOBAL → domaine de DEFAULT_TENANT_ID requis", async () => {
+  it("PUT oidc actif — provider GLOBAL (tenant défaut) → domaine de DEFAULT_TENANT_ID requis", async () => {
     mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
-    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
-    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
+      id: "oidc-global", kind: "oidc", name: "Global", enabled: false, tenantId: null, config: OIDC_CONFIG,
+    } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-global", kind: "oidc", name: "Global", enabled: true, tenantId: null, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
-      method: "POST",
-      url: "/api/auth/admin/providers",
-      payload: { kind: "oidc", name: "Global", enabled: true, config: OIDC_CONFIG },
+      method: "PUT",
+      url: "/api/auth/admin/providers/oidc-global",
+      payload: { enabled: true },
     })
-    expect(res.statusCode).toBe(201)
-    // §9.3 : portée réelle = tenantId null → settings du tenant défaut, jamais du tenant requête.
+    expect(res.statusCode).toBe(200)
+    // §9.3 : portée réelle = tenantId null → settings du tenant défaut.
     expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
     await app.close()
   })
 
-  it("POST oidc actif — provider tenant-scoped → domaine DU TENANT requis (pas du défaut)", async () => {
-    mockSettingsService.get.mockResolvedValue({ domain: "t1.example.com" })
-    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-t1", kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: {} } as never)
-    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-t1", kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: {} } as never)
+  it("POST oidc actif — domaine du tenant DÉFAUT suffit pour un provider GLOBAL créé", async () => {
+    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "oidc-new", kind: "oidc", name: "New", enabled: true, tenantId: null, config: {} } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-new", kind: "oidc", name: "New", enabled: true, tenantId: null, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
-      payload: { kind: "oidc", name: "T1", enabled: true, tenantId: "t-1", config: OIDC_CONFIG },
+      payload: { kind: "oidc", name: "New", enabled: true, config: OIDC_CONFIG },
     })
     expect(res.statusCode).toBe(201)
-    expect(mockSettingsService.get).toHaveBeenCalledWith("t-1")
+    const call = vi.mocked(prisma.authProvider.create).mock.calls[0]?.[0] as { data: { tenantId: string | null } }
+    // La portée réelle d'un provider créé via l'API est toujours GLOBALE.
+    expect(call.data.tenantId).toBeNull()
+    expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
+    // Le settings d'un autre tenant (même configuré) n'est jamais consulté.
+    expect(mockSettingsService.get).not.toHaveBeenCalledWith("t-1")
     await app.close()
   })
 
   it("POST ldap actif sans domaine → 201 (protocol non dépendant du domaine)", async () => {
-    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "ldap-corp", kind: "ldap", name: "LDAP", enabled: true, tenantId: "t-1", config: {} } as never)
+    vi.mocked(prisma.authProvider.create).mockResolvedValue({ id: "ldap-corp", kind: "ldap", name: "LDAP", enabled: true, tenantId: null, config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -547,27 +812,31 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
     await app.close()
   })
 
-  it("PUT — re-scope vers GLOBAL (tenantId: null) → domaine du tenant DÉFAUT requis, pas de l'ancien", async () => {
-    // §9.3 : portée finale du provider = null → garde contre DEFAULT_TENANT_ID,
-    // même quand la requête vient d'un autre tenant (harnais = t-1).
-    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW, enabled: true } as never)
-    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
-    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: null, config: {} } as never)
+  it("PUT — activation du provider A (tenant t-1) : les Settings d'un AUTRE tenant (B, pourtant configurés) ne sont JAMAIS consultés", async () => {
+    // Settings de B existent avec un domaine valide — jamais utilisés pour A.
+    mockSettingsService.get.mockImplementation(async (tenantId: string) =>
+      tenantId === "t-1" ? { domain: "a.example.com" } : { domain: "b.example.com" },
+    )
+    vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW } as never)
+    vi.mocked(prisma.authProvider.update).mockResolvedValue({ id: "oidc-corp", kind: "oidc", name: "Corp", enabled: true, tenantId: "t-1", config: {} } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
     const app = await buildApp()
     const res = await app.inject({
       method: "PUT",
       url: "/api/auth/admin/providers/oidc-corp",
-      payload: { tenantId: null },
+      payload: { enabled: true },
     })
     expect(res.statusCode).toBe(200)
-    expect(mockSettingsService.get).toHaveBeenCalledWith("tenant-default")
+    // Portée effective = provider (row.tenantId) — une et une seule résolution,
+    // pour t-1 uniquement : le settings d'un autre tenant (B) est invisible.
+    expect(mockSettingsService.get).toHaveBeenCalledTimes(1)
+    expect(mockSettingsService.get).toHaveBeenCalledWith("t-1")
     await app.close()
   })
 
-  it("PUT — re-scope vers GLOBAL sans domaine du tenant défaut → 400, update NON appelé", async () => {
+  it("PUT — tenantId présent dans le body → 400 tenant_id_not_allowed AVANT toute lecture Settings", async () => {
+    mockSettingsService.get.mockResolvedValue({ domain: "hullbay.local" })
     vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({ ...OIDC_ROW, enabled: true } as never)
-    mockSettingsService.get.mockResolvedValue({ domain: null })
     const app = await buildApp()
     const res = await app.inject({
       method: "PUT",
@@ -575,8 +844,11 @@ describe("Garde-fou §9 — domaine public requis (production)", () => {
       payload: { tenantId: null },
     })
     expect(res.statusCode).toBe(400)
-    expect(res.json().code).toBe("domain_not_configured")
+    expect(res.json().code).toBe("tenant_id_not_allowed")
     expect(prisma.authProvider.update).not.toHaveBeenCalled()
+    // Le re-scope est bloqué avant la garde domaine / autoManaged : aucune
+    // résolution de Settings de quelque tenant que ce soit.
+    expect(mockSettingsService.get).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -770,6 +1042,9 @@ describe("Workflow d'approbation (owner)", () => {
 describe("Phase A rework — autogestion, sanitisation, activation gardée, prévol", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Les describes précédents peuvent laisser un domaine résolu en mock :
+    // en env de test, resolvePublicBase doit retomber sur le fallback dev.
+    mockSettingsService.get.mockResolvedValue(undefined)
   })
 
   it("POST oidc sans redirectUri → champs autogérés (callback + discovery) persistés", async () => {
@@ -777,7 +1052,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
       id: "oidc-auto", kind: "oidc", name: "Auto", enabled: false, tenantId: "t-1", config: {},
     } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -795,7 +1070,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
       id: "oidc-manual", kind: "oidc", name: "Manual", enabled: false, tenantId: "t-1", config: {},
     } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -812,7 +1087,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
   })
 
   it("POST — scopes vide ('') rejetée (sanitisation trim+min)", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -829,7 +1104,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
   })
 
   it("POST ldap — timeoutMs au-delà du plafond (120000) rejeté", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -845,7 +1120,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
   })
 
   it("POST ldap — clé inconnue dans tlsOptions rejetée (strict nested)", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -866,7 +1141,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
   })
 
   it("POST saml — cert NON-PEM rejeté (garde-fou §5)", async () => {
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
@@ -891,7 +1166,7 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
       id: "saml-ok", kind: "saml", name: "SAML", enabled: false, tenantId: "t-1", config: {},
     } as never)
     vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
-    const app = await buildApp()
+    const app = await buildApp("owner", "tenant-default")
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/admin/providers",
