@@ -20,7 +20,17 @@
  *   400 tenant_providers_not_supported au lieu d'un provider fantôme ;
  * - anti-lockout résolu selon la portée du provider (jamais globale) :
  *   tenant-scoped → autres providers actifs du MÊME tenant ; global →
- *   autres providers actifs globaux.
+ *   autres providers actifs globaux. Count + mutation dans la MÊME
+ *   transaction, sérialisées par un advisory lock de portée Postgres
+ *   (lockProviderScope) : deux mutateurs concurrents ne peuvent plus
+ *   désactiver/supprimer « le dernier provider » en se basant sur un count
+ *   périmé (anti-TOCTOU).
+ *
+ * LIMITATION CONNUE (documentée) : les providers tenant-scoped d'un tenant
+ * (hors tenant défaut) sont administrables ici mais ne sont jamais hydratés
+ * par le ProviderRegistry de runtime (qui n'expose que globaux + tenant
+ * défaut) — un provider tenant-scoped hors défaut n'est donc jamais utilisé
+ * par le SSO tant que le registre n'est pas tenant-aware (voir registry/).
  *
  * Chaque mutation re-hydrate le ProviderRegistry depuis la DB (loadFromDb).
  */
@@ -110,18 +120,86 @@ function authErrorPayload(err: unknown) {
   return undefined
 }
 
-/** Probe HTTP bornée (5 s) — ne lève jamais : ok/message pour le prévol. */
-async function probeHttp(url: string): Promise<{ ok: boolean; message: string }> {
+type LockTx = {
+  $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<number>
+}
+
+/**
+ * Sérialise les mutations d'une PORTÉE de providers (advisory lock Postgres,
+ * scope transaction). Deux écrivains concurrents de la même portée attendent
+ * tour à tour : le second relit le count APRÈS le commit du premier. Sans ce
+ * lock, la transaction isolait bien count+mutation mais deux transactions
+ * concurrentes pouvaient chacune voir « un autre provider actif » puis le
+ * désactiver/supprimer toutes les deux → portée à zéro provider actif.
+ *
+ * $executeRaw (pas $queryRaw) : pg_advisory_xact_lock retourne void, que
+ * Prisma refuse de désérialiser en SELECT (P2010 « deserialize column of type
+ * void »).
+ *
+ * Clé : "hullbay:providers:" + "g:global" (portée globale, tenantId null) ou
+ * "t:<tenantId>" — namespaces distincts, un tenant nommé "global" ne partage
+ * jamais la clé de la portée globale ; les deux campagnes ne se bloquent pas.
+ */
+async function lockProviderScope(tx: LockTx, scope: string | null): Promise<void> {
+  const key = scope === null ? "g:global" : `t:${scope}`
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('hullbay:providers:' || ${key}, 0))`
+}
+
+/** Fetch borné (timeout 5 s par défaut) via AbortController. */
+async function fetchWithTimeout(url: string, init?: RequestInit, ms = 5000): Promise<Response> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 5000)
+  const timer = setTimeout(() => controller.abort(), ms)
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: "follow" })
-    return { ok: res.ok, message: `HTTP ${res.status}` }
-  } catch {
-    return { ok: false, message: "injoignable (timeout 5s)" }
+    return await fetch(url, { ...init, signal: controller.signal })
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Probe HTTP bornée (5 s) — ne lève jamais : ok/message pour le prévol.
+ *
+ * Politique egress / SSRF : route owner-only, cibles = URL de la config IdP
+ * fournie par l'admin. Chaque saut (dont redirects, follow) est borné à 5 s ;
+ * on suit les redirects volontairement (issuer http→https légitimes), et il
+ * n'y a PAS de blocage des réseaux internes (metadata/cloud) à ce niveau.
+ * Risque accepté, à durcir plus tard (SSRFTool/réseau interne) — documenté.
+ */
+async function probeHttp(url: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const res = await fetchWithTimeout(url, { redirect: "follow" })
+    const result = { ok: res.ok, message: `HTTP ${res.status}` }
+    // On n'utilise que le statut : libérer le body (socket/pool non retenus).
+    await res.body?.cancel()
+    return result
+  } catch {
+    return { ok: false, message: "injoignable (timeout 5s)" }
+  }
+}
+
+/**
+ * Lit un body texte avec un plafond d'octets : au-delà, cancel + throw.
+ * Empêche un discovery énorme (IdP non fiable, route admin) d'épuiser la
+ * mémoire de l'hôte.
+ */
+async function readBoundedText(res: Response, maxBytes: number): Promise<string> {
+  const reader = res.body?.getReader()
+  if (!reader) return res.text()
+  const chunks: string[] = []
+  const decoder = new TextDecoder()
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel()
+      throw new Error("body_too_large")
+    }
+    chunks.push(decoder.decode(value, { stream: true }))
+  }
+  chunks.push(decoder.decode())
+  return chunks.join("")
 }
 
 function isPemCertificate(value: string): boolean {
@@ -499,9 +577,11 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       // Garde anti-lockout scoped : on ne peut jamais désactiver le dernier
       // provider actif DE LA PORTÉE (les providers d'autres tenants ne
       // comptent pas, pas plus que les globaux pour une portée tenant).
-      // Plaquée dans la MÊME transaction que l'update : pas de TOCTOU entre
-      // le count et la mutation (2 requêtes concurrentes ne peuvent plus
-      // toutes deux croire qu'un autre provider reste actif).
+      // Count + update dans la MÊME transaction, précédés d'un lock de portée
+      // (advisory) qui sérialise deux mutateurs concurrents : le second relit
+      // le count APRÈS le commit du premier → pas de TOCTOU, les deux ne
+      // peuvent plus croire qu'un autre provider reste actif. L'état enabled
+      // est relu dans la transaction (jamais le row hors-tx, périmable).
       const updateData = {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
@@ -510,10 +590,18 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       let updated
       try {
         updated = await prisma.$transaction(async (tx) => {
-          if (body.enabled === false && row.enabled) {
-            const otherEnabled = await activeProvidersCountExcept(id, scope, tx)
-            if (otherEnabled === 0) {
-              throw new AuthError("cannot_disable_last_provider", "au moins un provider doit rester actif", 400)
+          if (body.enabled === false) {
+            // Re-lecture de enabled DANS la transaction, après le lock : un
+            // PUT concurrent a pu l'activer entre le findUnique et ici (le
+            // row.enabled hors-tx serait périmé). Le lock de portée n'est pris
+            // que sur ce chemin (désactivation) — un rename/config n'attend pas.
+            const fresh = await tx.authProvider.findUnique({ where: { id }, select: { enabled: true } })
+            if (fresh?.enabled) {
+              await lockProviderScope(tx, scope)
+              const otherEnabled = await activeProvidersCountExcept(id, scope, tx)
+              if (otherEnabled === 0) {
+                throw new AuthError("cannot_disable_last_provider", "au moins un provider doit rester actif", 400)
+              }
             }
           }
           return tx.authProvider.update({ where: { id }, data: updateData })
@@ -554,12 +642,17 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
       if (row.id === "local") {
         return reply.code(400).send({ error: "cannot_delete_local_provider", message: "le provider local ne peut pas être supprimé", code: "cannot_delete_local_provider" })
       }
-      // Suppression atomique : garde anti-lockout scoped + comptes d'identités
-      // et pendings + delete dans la MÊME transaction — pas de TOCTOU (2
-      // suppressions concurrentes du dernier provider ne peuvent plus passer).
+      // Suppression atomique : lock de portée (advisory) + garde anti-lockout
+      // scoped + comptes d'identités et pendings + delete dans la MÊME
+      // transaction — pas de TOCTOU (2 suppressions concurrentes du dernier
+      // provider ne peuvent plus passer : l'une attend le commit de l'autre).
       try {
         await prisma.$transaction(async (tx) => {
-          if (row.enabled) {
+          await lockProviderScope(tx, row.tenantId)
+          // enabled relu dans la transaction (row hors-tx périmable) : le
+          // lock sérialise les concurrents, le fresh read décide la garde.
+          const fresh = await tx.authProvider.findUnique({ where: { id }, select: { enabled: true } })
+          if (fresh?.enabled) {
             const otherEnabled = await activeProvidersCountExcept(id, row.tenantId, tx)
             if (otherEnabled === 0) {
               throw new AuthError("cannot_delete_last_provider", "au moins un provider doit rester actif", 400)
@@ -706,10 +799,12 @@ export async function registerProvidersRoutes(app: FastifyInstance) {
           let message = probe.ok ? `discovery joignable (${probe.message})` : `discovery ${probe.message}`
           if (probe.ok) {
             try {
-              const doc = (await (await fetch(discoveryUrl)).json()) as { issuer?: string }
+              const jsonRes = await fetchWithTimeout(discoveryUrl, { redirect: "follow" })
+              const text = await readBoundedText(jsonRes, 262144)
+              const doc = JSON.parse(text) as { issuer?: string }
               if (doc.issuer && doc.issuer !== cfg.issuer) message += " — issuer ne correspond pas au discovery"
             } catch {
-              message += " — réponse non-JSON"
+              message += " — réponse non-JSON ou trop volumineuse"
             }
           }
           steps.push({ step: "discovery", ok: probe.ok, message, latencyMs: Date.now() - t0 })

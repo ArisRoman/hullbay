@@ -37,8 +37,19 @@ vi.mock("../../../lib/prisma", () => {
   const auditLog = { create: vi.fn(() => Promise.resolve({ id: "audit-1" })) }
   // Transaction par défaut : délègue au MÊME client mocké (count/update/delete
   // redirigés vers les mêmes vi.fn). Les tests du workflow d'approbation la
-  // remplacent par leur propre tx (voir txMock) — non affectés.
-  const client = { authProvider, tenant, authIdentity, pendingIdentity, user, membership, auditLog }
+  // remplacent par leur propre tx (voir txMock) — non affectés. $executeRaw
+  // simule le advisory lock de portée (voir tests concurrence, où il est
+  // remplacé par un VRAI mutex pour prouver la sérialisation).
+  const client = {
+    authProvider,
+    tenant,
+    authIdentity,
+    pendingIdentity,
+    user,
+    membership,
+    auditLog,
+    $executeRaw: vi.fn(),
+  }
   return {
     prisma: {
       ...client,
@@ -660,6 +671,166 @@ vi.mocked(prisma.authProvider.findUnique).mockResolvedValue({
     expect(prisma.authProvider.delete).not.toHaveBeenCalled()
     await app.close()
   })
+
+  it("PUT — CONCURRENCE RÉELLE (mutex par clé) : 2 désactivations simultanées de la portée → 1 succès, 1 refus", async () => {
+    const config = { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" }
+    // DB simulée STATEFUL : A et B actifs dans le tenant t-1. Le premier
+    // commit (A désactivé) conditionne la ré-lecture du second — son count ne
+    // voit plus que 0 → refus. C'est le faux advisory lock (mutex par clé)
+    // qui impose cet ordre, comme pg_advisory_xact_lock en base réelle : sans
+    // lui, les deux transactions liraient le count avant tout commit et les
+    // deux désactivations passeraient → portée à zéro provider actif.
+    const db = new Map<
+      string,
+      { id: string; kind: string; name: string; enabled: boolean; tenantId: string | null; config: unknown }
+    >([
+      ["oidc-a", { id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1", config }],
+      ["oidc-b", { id: "oidc-b", kind: "oidc", name: "B", enabled: true, tenantId: "t-1", config }],
+    ])
+    const row = (id: string) => {
+      const r = db.get(id)
+      return r ? { ...r } : undefined
+    }
+    vi.mocked(prisma.authProvider.findUnique).mockImplementation(((async (args: { where: { id: string } }) => row(args.where.id)) as never))
+    vi.mocked(prisma.authProvider.count).mockImplementation((async (args: {
+      where?: { id?: { not?: string }; tenantId?: string | null }
+    }) => {
+      const not = args?.where?.id?.not ?? ""
+      const tenantId = args?.where?.tenantId ?? null
+      let n = 0
+      for (const r of db.values()) {
+        if (r.id !== not && r.enabled && r.tenantId === tenantId) n += 1
+      }
+      return n
+    }) as never)
+    vi.mocked(prisma.authProvider.update).mockImplementation((async (args: { where: { id: string }; data: { enabled?: boolean } }) => {
+      const current = db.get(args.where.id)!
+      const next = { ...current, enabled: args.data.enabled ?? current.enabled }
+      db.set(current.id, next)
+      return { ...next }
+    }) as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+
+    // VRAI mutex simulé du advisory lock : un verrou par clé, tenu jusqu'au
+    // premier write (update/delete) de la transaction qui l'a acquis.
+    const held = new Set<string>()
+    let signal: { p: Promise<void>; resolve: () => void }
+    const newSignal = () => {
+      let resolveFn!: () => void
+      const p = new Promise<void>((r) => (resolveFn = r))
+      const s = { p, resolve: resolveFn }
+      signal = s
+      return s
+    }
+    newSignal()
+    const release = () => {
+      held.clear()
+      signal.resolve()
+      newSignal()
+    }
+    vi.mocked(prisma.$executeRaw).mockImplementation((async (_q: TemplateStringsArray, key?: unknown) => {
+      const k = String(key ?? "g:global")
+      while (held.has(k)) await signal.p
+      held.add(k)
+      return 1
+    }) as never)
+
+    const app = await buildApp()
+    const disable = (id: string) => app.inject({ method: "PUT", url: `/api/auth/admin/providers/${id}`, payload: { enabled: false } })
+    // Relâche le mutex une fois le premier flux terminé (commit simulé).
+    const rA = disable("oidc-a").then((r) => {
+      release()
+      return r
+    })
+    const rB = disable("oidc-b")
+    const [ra, rb] = await Promise.all([rA, rB])
+    expect([ra.statusCode, rb.statusCode].sort()).toEqual([200, 400])
+    const refused = ra.statusCode === 400 ? ra : rb
+    expect(refused.json().code).toBe("cannot_disable_last_provider")
+    // Sérialisation : exactement UNE mutation a abouti.
+    expect(prisma.authProvider.update).toHaveBeenCalledTimes(1)
+    // Lock acquis aux deux passes (mutex par clé t:<tenant>).
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2)
+    const raw = JSON.stringify(vi.mocked(prisma.$executeRaw).mock.calls)
+    expect(raw).toContain("hullbay:providers:")
+    expect(raw).toContain("t:t-1")
+    // Hygiène : le flux refusé a acquis le verrou sans jamais l'écrire —
+    // relâcher pour ne pas pendre les tests suivants (mock persistant).
+    release()
+    await app.close()
+  })
+
+  it("DELETE — CONCURRENCE RÉELLE (mutex par clé) : 2 suppressions simultanées scoped → 1 succès, 1 refus", async () => {
+    const db = new Map<string, { id: string; kind: string; name: string; enabled: boolean; tenantId: string | null }>([
+      ["oidc-a", { id: "oidc-a", kind: "oidc", name: "A", enabled: true, tenantId: "t-1" }],
+      ["oidc-b", { id: "oidc-b", kind: "oidc", name: "B", enabled: true, tenantId: "t-1" }],
+    ])
+    const row = (id: string) => {
+      const r = db.get(id)
+      return r ? { ...r } : undefined
+    }
+    vi.mocked(prisma.authProvider.findUnique).mockImplementation(((async (args: { where: { id: string } }) => row(args.where.id)) as never))
+    vi.mocked(prisma.authProvider.count).mockImplementation((async (args: {
+      where?: { id?: { not?: string }; tenantId?: string | null }
+    }) => {
+      const not = args?.where?.id?.not ?? ""
+      const tenantId = args?.where?.tenantId ?? null
+      let n = 0
+      for (const r of db.values()) {
+        if (r.id !== not && r.enabled && r.tenantId === tenantId) n += 1
+      }
+      return n
+    }) as never)
+    vi.mocked(prisma.authIdentity.count).mockResolvedValue(0 as never)
+    vi.mocked(prisma.pendingIdentity.count).mockResolvedValue(0 as never)
+    vi.mocked(prisma.authProvider.delete).mockImplementation((async (args: { where: { id: string } }) => {
+      const r = db.get(args.where.id)
+      if (r) db.delete(r.id)
+      return r ?? {}
+    }) as never)
+    vi.mocked(prisma.authProvider.findMany).mockResolvedValue([] as never)
+
+    const held = new Set<string>()
+    let signal: { p: Promise<void>; resolve: () => void }
+    const newSignal = () => {
+      let resolveFn!: () => void
+      const p = new Promise<void>((r) => (resolveFn = r))
+      const s = { p, resolve: resolveFn }
+      signal = s
+      return s
+    }
+    newSignal()
+    const release = () => {
+      held.clear()
+      signal.resolve()
+      newSignal()
+    }
+    vi.mocked(prisma.$executeRaw).mockImplementation((async (_q: TemplateStringsArray, key?: unknown) => {
+      const k = String(key ?? "g:global")
+      while (held.has(k)) await signal.p
+      held.add(k)
+      return 1
+    }) as never)
+
+    const app = await buildApp()
+    const remove = (id: string) => app.inject({ method: "DELETE", url: `/api/auth/admin/providers/${id}` })
+    const rA = remove("oidc-a").then((r) => {
+      release()
+      return r
+    })
+    const rB = remove("oidc-b")
+    const [ra, rb] = await Promise.all([rA, rB])
+    expect([ra.statusCode, rb.statusCode].sort()).toEqual([204, 400])
+    const refused = ra.statusCode === 400 ? ra : rb
+    expect(refused.json().code).toBe("cannot_delete_last_provider")
+    expect(prisma.authProvider.delete).toHaveBeenCalledTimes(1)
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(2)
+    const raw = JSON.stringify(vi.mocked(prisma.$executeRaw).mock.calls)
+    expect(raw).toContain("hullbay:providers:")
+    expect(raw).toContain("t:t-1")
+    release()
+    await app.close()
+  })
 })
 
 describe("Garde-fou §9 — domaine public requis (production)", () => {
@@ -1229,9 +1400,53 @@ describe("Phase A rework — autogestion, sanitisation, activation gardée, pré
       expect(res.json().schemaValid).toBe(true)
       expect(res.json().ok).toBe(true)
       expect(res.json().steps.find((s: { step: string }) => s.step === "discovery")).toMatchObject({ ok: true })
+      // Le 2e fetch du discovery (parse JSON) est lui aussi borné : timeout
+      // 5 s via AbortSignal + politique redirects explicite (follow), comme la
+      // probe. Pas de fetch hors-bornes sur une URL fournie par l'admin.
+      expect(fetch).toHaveBeenCalledTimes(2)
+      const calls = vi.mocked(fetch).mock.calls
+      expect(calls).toHaveLength(2)
+      expect(calls[1]![1]).toMatchObject({ signal: expect.any(AbortSignal), redirect: "follow" })
       await app.close()
     } finally {
       vi.unstubAllGlobals()
+    }
+  })
+
+  it("POST /preflight — discovery muet → timeout 5 s EFFECTIF (AbortController, pas d'autre fetch)", async () => {
+    // Le discovery ne répond jamais tant que le signal n'est pas aborté :
+    // la seule façon de sortir est le timeout de fetchWithTimeout (5 s).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        })
+      }) as unknown as typeof fetch,
+    )
+    const app = await buildApp()
+    try {
+      vi.useFakeTimers()
+      const pending = app.inject({
+        method: "POST",
+        url: "/api/auth/admin/providers/preflight",
+        payload: {
+          kind: "oidc",
+          config: { issuer: "https://idp.example.org", clientId: "c", redirectUri: "https://sp.example.org/cb" },
+        },
+      })
+      await vi.advanceTimersByTimeAsync(5000)
+      const res = await pending
+      expect(res.json().ok).toBe(false)
+      const step = (res.json().steps as { step: string; ok: boolean; message: string }[]).find((s) => s.step === "discovery")
+      expect(step?.ok).toBe(false)
+      expect(step?.message).toContain("timeout 5s")
+      // La probe a échoué : le 2e fetch (JSON) n'est même pas tenté.
+      expect(fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      await app.close()
     }
   })
 
