@@ -2,7 +2,6 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-
 const PERMISSIONS = [
   ["cluster.read", "cluster", "read"],
   ["cluster.create", "cluster", "create"],
@@ -120,67 +119,88 @@ const PRESETS = [
   { name: "Owner", keys: OWNER_KEYS },
 ];
 
-// Un passage de ce script, même répété plusieurs fois, ne doit jamais créer
-// de doublon, jamais supprimer une permission existante, jamais toucher aux
-// adhésions déjà en place. On retrouve chaque permission par sa clé, chaque
-// rôle par son couple tenant et nom, jamais par un nouvel identifiant généré.
 async function ensurePermissions() {
   const byKey = new Map();
   for (const [key, resource, action] of PERMISSIONS) {
-    const permission = await prisma.permission.upsert({
-      where: { key },
-      update: {},
-      create: { key, resource, action },
-    });
+    let permission = await prisma.permission.findUnique({ where: { key } });
+    if (!permission) {
+      permission = await prisma.permission.create({
+        data: { key, resource, action },
+      });
+    }
     byKey.set(key, permission);
   }
   return byKey;
 }
 
-// Un preset déjà présent n'est jamais retouché : si un administrateur a retiré ou
-// ajouté des permissions, le peuplement ne les réinitialise pas. Les permissions
-// ne sont posées qu'à la création du rôle, dans la même transaction.
 async function ensurePresetsForTenant(tenantId, permissionByKey) {
-  await prisma.$transaction(async (tx) => {
-    for (const preset of PRESETS) {
-      const existing = await tx.role.findUnique({
-        where: { tenantId_name: { tenantId, name: preset.name } },
-      });
-      if (existing) continue;
+  if (!tenantId || typeof tenantId !== "string") return;
 
-      const role = await tx.role.create({
-        data: { tenantId, name: preset.name, isPreset: true, isSystem: false },
+  for (const preset of PRESETS) {
+    try {
+      await prisma.role.create({
+        data: {
+          tenantId,
+          name: preset.name,
+          isPreset: true,
+          isSystem: false,
+          rolePermissions: {
+            create: preset.keys.map((key) => {
+              const perm = permissionByKey.get(key);
+              if (!perm) {
+                throw new Error(
+                  `Permission introuvable dans le catalogue : ${key}`,
+                );
+              }
+              return {
+                permissionId: perm.id,
+                scopeType: "tenant",
+                scopeId: tenantId,
+              };
+            }),
+          },
+        },
       });
-      await tx.rolePermission.createMany({
-        data: preset.keys.map((key) => ({
-          roleId: role.id,
-          permissionId: permissionByKey.get(key).id,
-          scopeType: "tenant",
-          scopeId: tenantId,
-        })),
-        skipDuplicates: true,
-      });
+    } catch (error) {
+      if (error.code === "P2002" || error.code === "P2003") {
+        continue;
+      }
+      throw error;
     }
+  }
 
-    // Root : réservé et protégé, jamais attribué, aucune permission.
-    const root = await tx.role.findUnique({
-      where: { tenantId_name: { tenantId, name: "Root" } },
+  try {
+    await prisma.role.create({
+      data: {
+        tenantId,
+        name: "Root",
+        isPreset: false,
+        isSystem: true,
+      },
     });
-    if (!root) {
-      await tx.role.create({
-        data: { tenantId, name: "Root", isPreset: false, isSystem: true },
-      });
+  } catch (error) {
+    if (error.code === "P2002" || error.code === "P2003") {
+      console.warn("Le rôle 'Root' existe déjà ou le tenant a été supprimé.");
+    } else {
+      throw error;
     }
-  });
+  }
 }
 
 async function main() {
+  console.log("Début du peuplement du modèle d'autorisation...");
+
   const permissionByKey = await ensurePermissions();
+  console.log("Permissions vérifiées ou créées.");
+
   const tenants = await prisma.tenant.findMany({ select: { id: true } });
+  console.log(`${tenants.length} tenant(s) trouvé(s) en base de données.`);
+
   for (const tenant of tenants) {
     await ensurePresetsForTenant(tenant.id, permissionByKey);
   }
-  console.log(`Peuplement terminé pour ${tenants.length} tenant(s).`);
+
+  console.log("Peuplement terminé avec succès.");
 }
 
 main()
