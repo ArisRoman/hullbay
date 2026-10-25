@@ -1,0 +1,275 @@
+import { createHash, randomUUID } from "node:crypto"
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import type { BackupManifest, BackupRunPhase } from "@hullbay/shared"
+import { LocalStorageProvider } from "../storage/local-provider"
+import type { StorageProvider } from "../storage/types"
+import type { ResolvedDestination } from "../storage/registry"
+import { postgresStrategy } from "../strategies/postgres"
+import type { StrategyTarget } from "../strategies/types"
+import {
+  BackupLifecycle,
+  type ArtifactProducer,
+  type ProducedArtifact,
+  type RunStore,
+  type RunTrigger,
+} from "../engine/lifecycle"
+
+class MemoryRunStore implements RunStore {
+  runs: {
+    id: string
+    policyId: string
+    status: string
+    phase: BackupRunPhase
+    errorCode?: string
+    sizeBytes?: number
+    phases: BackupRunPhase[]
+  }[] = []
+  artifacts: { id: string; runId: string; storageKey: string; manifest: BackupManifest }[] = []
+
+  async createRun(policyId: string, _trigger: RunTrigger) {
+    const run = {
+      id: `run_${this.runs.length + 1}`,
+      policyId,
+      status: "RUNNING",
+      phase: "resolving" as BackupRunPhase,
+      phases: [] as BackupRunPhase[],
+    }
+    this.runs.push(run)
+    return { id: run.id }
+  }
+  async setPhase(runId: string, phase: BackupRunPhase) {
+    const run = this.runs.find((r) => r.id === runId)!
+    run.phase = phase
+    run.phases.push(phase)
+  }
+  async complete(runId: string, sizeBytes: number) {
+    const run = this.runs.find((r) => r.id === runId)!
+    run.status = "COMPLETED"
+    run.sizeBytes = sizeBytes
+  }
+  async fail(runId: string, errorCode: string) {
+    const run = this.runs.find((r) => r.id === runId)!
+    run.status = "FAILED"
+    run.errorCode = errorCode
+  }
+  async createArtifact(input: {
+    runId: string
+    storageKey: string
+    manifestJson: BackupManifest
+  }) {
+    const artifact = {
+      id: `art_${this.artifacts.length + 1}`,
+      runId: input.runId,
+      storageKey: input.storageKey,
+      manifest: input.manifestJson,
+    }
+    this.artifacts.push(artifact)
+    return { id: artifact.id }
+  }
+}
+
+const target: StrategyTarget = {
+  nodeId: "node_1",
+  name: "orders-db",
+  kind: "postgres",
+  engine: "postgres",
+  engineVersion: "16",
+  host: "boz_shop_db",
+  port: 5432,
+  database: "orders",
+  username: "app",
+  passwordSecretRef: "orders_db_password",
+}
+
+const destination: ResolvedDestination = {
+  protocol: "s3",
+  basePath: "hullbay",
+  config: {
+    protocol: "s3",
+    bucket: "backups",
+    accessKeyId: "k",
+    secretAccessKey: "s",
+    useTls: true,
+    pathStyle: false,
+  },
+}
+
+function makeProducer(
+  payload: Buffer,
+  options: { corruptChecksum?: boolean; failAfterWrite?: boolean } = {},
+): ArtifactProducer {
+  return {
+    async produce({ runId, artifactId, stagingPrefix, provider, onPhase }) {
+      if (!provider) throw new Error("provider requis dans ce test")
+      const payloadFileName = "payload.sql.gz"
+      const payloadKey = `${stagingPrefix}/${payloadFileName}`
+      await onPhase("transferring")
+      await provider.put(payloadKey, payload)
+      if (options.failAfterWrite) throw new Error("connexion perdue")
+
+      const checksum = options.corruptChecksum
+        ? createHash("sha256").update("autre chose").digest("hex")
+        : createHash("sha256").update(payload).digest("hex")
+
+      return {
+        payloadKey,
+        payloadFileName,
+        checksumSha256: checksum,
+        sizeBytes: payload.length,
+      } satisfies ProducedArtifact
+    },
+  }
+}
+
+describe("BackupLifecycle", () => {
+  let root: string
+  let provider: LocalStorageProvider
+  let store: MemoryRunStore
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "hullbay-lifecycle-"))
+    provider = new LocalStorageProvider(root)
+    store = new MemoryRunStore()
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  function lifecycle() {
+    return new BackupLifecycle(store)
+  }
+
+  function input(producer: ArtifactProducer, overrides: Record<string, unknown> = {}) {
+    return {
+      policyId: "pol_1",
+      targetId: "tgt_1",
+      destinationId: "dst_1",
+      projectSlug: "shop",
+      trigger: "manual" as const,
+      strategy: postgresStrategy,
+      target,
+      destination,
+      provider,
+      producer,
+      verification: "checksum" as const,
+      ...overrides,
+    }
+  }
+
+  it("commite un artifact complet et suit toutes les phases", async () => {
+    const payload = Buffer.from("dump-content")
+    const result = await lifecycle().execute(input(makeProducer(payload)))
+
+    expect(result.ok).toBe(true)
+    expect(store.artifacts).toHaveLength(1)
+    expect(store.runs[0]!.status).toBe("COMPLETED")
+    expect(store.runs[0]!.phases).toEqual([
+      "resolving",
+      "extracting",
+      "transferring",
+      "verifying",
+      "committing",
+      "done",
+    ])
+
+    const artifact = store.artifacts[0]!
+    expect(artifact.storageKey).toBe(`hullbay/shop/orders-db/${artifact.manifest.artifactId}`)
+    expect(await provider.stat(`${artifact.storageKey}/manifest.json`)).not.toBeNull()
+    expect(await provider.stat(`${artifact.storageKey}/payload.sql.gz`)).not.toBeNull()
+    expect(await provider.stat(`${artifact.storageKey}/payload.sha256`)).not.toBeNull()
+    // Staging nettoyé.
+    expect(await provider.list(".staging")).toEqual([])
+  })
+
+  it("ne crée aucun artifact si le transfert échoue", async () => {
+    const result = await lifecycle().execute(
+      input(makeProducer(Buffer.from("x"), { failAfterWrite: true })),
+    )
+
+    expect(result.ok).toBe(false)
+    expect(store.artifacts).toHaveLength(0)
+    expect(store.runs[0]!.status).toBe("FAILED")
+    expect(await provider.list(".staging")).toEqual([])
+  })
+
+  it("refuse le commit quand le checksum distant diffère", async () => {
+    const result = await lifecycle().execute(
+      input(makeProducer(Buffer.from("payload"), { corruptChecksum: true })),
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errorCode).toBe("checksum_mismatch")
+    expect(store.artifacts).toHaveLength(0)
+    expect(store.runs[0]!.status).toBe("FAILED")
+  })
+
+  it("refuse le commit quand la taille distante diffère", async () => {
+    const producer: ArtifactProducer = {
+      async produce(ctx) {
+        const produced = await makeProducer(Buffer.from("12345")).produce(ctx)
+        return { ...produced, sizeBytes: 999 }
+      },
+    }
+    const result = await lifecycle().execute(input(producer))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errorCode).toBe("verify_failed")
+    expect(store.artifacts).toHaveLength(0)
+  })
+
+  it("dégrade le commit quand le backend ne supporte pas le rename", async () => {
+    const noMove: StorageProvider = {
+      id: "no-move",
+      capabilities: () => provider.capabilities(),
+      put: (key, data, opts) => provider.put(key, data, opts),
+      get: (key) => provider.get(key),
+      stat: (key) => provider.stat(key),
+      list: (prefix) => provider.list(prefix),
+      delete: (key) => provider.delete(key),
+      move: async () => false,
+      hash: (key, algorithm) => provider.hash(key, algorithm),
+    }
+
+    const result = await lifecycle().execute(
+      input(makeProducer(Buffer.from("payload")), { provider: noMove }),
+    )
+    expect(result.ok).toBe(true)
+    expect(store.artifacts).toHaveLength(1)
+    expect(await provider.list(".staging")).toEqual([])
+  })
+
+  it("ne crée aucun artifact si le manifest ne peut pas être écrit (commit incomplet)", async () => {
+    const failingManifest: StorageProvider = {
+      id: "manifest-fail",
+      capabilities: () => provider.capabilities(),
+      put: async (key, data, opts) => {
+        if (key.endsWith("manifest.json")) throw new Error("quota dépassé")
+        return provider.put(key, data, opts)
+      },
+      get: (key) => provider.get(key),
+      stat: (key) => provider.stat(key),
+      list: (prefix) => provider.list(prefix),
+      delete: (key) => provider.delete(key),
+      move: (from, to) => provider.move(from, to),
+      hash: (key, algorithm) => provider.hash(key, algorithm),
+    }
+
+    const result = await lifecycle().execute(
+      input(makeProducer(Buffer.from("payload")), { provider: failingManifest }),
+    )
+    expect(result.ok).toBe(false)
+    expect(store.artifacts).toHaveLength(0)
+    expect(store.runs[0]!.status).toBe("FAILED")
+  })
+
+  it("refuse avant transfert si les prérequis échouent", async () => {
+    const badVersion = { ...target, engineVersion: "pas-une-version" }
+    const result = await lifecycle().execute(input(makeProducer(Buffer.from("x")), { target: badVersion }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.errorCode).toBe("prereq_failed")
+    expect(store.artifacts).toHaveLength(0)
+  })
+})
