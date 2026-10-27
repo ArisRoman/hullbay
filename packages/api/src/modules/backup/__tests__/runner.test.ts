@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { BackupManifest } from "@hullbay/shared"
 import type { DockerEngineService } from "../../docker-engine/service"
 import { SwarmBackupRunner } from "../runner"
+import { SwarmStorageProvider } from "../storage/swarm-provider"
 import type { ResolvedDestination } from "../storage/registry"
 import { postgresStrategy } from "../strategies/postgres"
 
@@ -52,6 +52,11 @@ function fakeEngine(logs = `HULLBAY_BACKUP_RESULT 42 ${checksum}`) {
 function makeRunner(engine: DockerEngineService) {
   return new SwarmBackupRunner({
     engine,
+    storage: {
+      stagingUploadScript: (key) => `rclone rcat "$REMOTE/${key}"`,
+      remoteString: () => "s3,bucket=backups",
+      transportSecret: () => null,
+    },
     image: "ghcr.io/hullbay/backup-runner:latest",
     networkName: "boz_shop_orders-db-net",
     timeoutSec: 30,
@@ -190,50 +195,55 @@ describe("SwarmBackupRunner.produce", () => {
   })
 })
 
-describe("SwarmBackupRunner.commit", () => {
-  it("écrit le manifest en dernier, après le move et le checksum", async () => {
-    const engine = fakeEngine()
-    const manifest: BackupManifest = {
-      formatVersion: 1,
-      artifactId: "bak_1",
-      runId: "run_1",
-      createdAt: "2026-10-25T10:00:00.000Z",
-      target: { nodeId: "n1", name: "orders-db", kind: "postgres" },
-      source: {
-        engine: "postgres",
-        engineVersion: "16",
-        host: "boz_shop_db",
-        port: 5432,
-        username: "app",
-      },
-      strategy: { id: "postgres.pg_dump", version: 1, tool: "pg_dump", toolVersion: "16" },
-      payload: { path: "payload.sql.gz", format: "sql.gz", sizeBytes: 42 },
-      checksum: { algorithm: "sha256", value: checksum },
-      encryption: { mode: "none" },
-      commit: { mode: "atomic-rename" },
-      restore: { strategyId: "postgres.pg_dump", command: "psql", requires: {} },
-    }
-
-    await makeRunner(engine as unknown as DockerEngineService).commit({
-      produced: {
-        payloadKey: ".staging/run_1/payload.sql.gz",
-        payloadFileName: "payload.sql.gz",
-        checksumSha256: checksum,
-        sizeBytes: 42,
+describe("SwarmStorageProvider", () => {
+  function makeProvider(engine: DockerEngineService) {
+    return new SwarmStorageProvider(
+      {
+        engine,
+        image: "ghcr.io/hullbay/backup-runner:latest",
+        networkName: "boz_shop_orders-db-net",
+        timeoutSec: 30,
+        pollMs: 1,
       },
       destination,
-      finalPrefix: "hullbay/shop/orders-db/bak_1",
-      manifest,
-    })
+    )
+  }
 
+  it("put crée le secret blob avec le contenu puis le nettoie", async () => {
+    const engine = fakeEngine()
+    await makeProvider(engine as unknown as DockerEngineService).put(
+      "hullbay/shop/orders-db/bak_1/manifest.json",
+      Buffer.from('{"ok":true}'),
+    )
+    expect(engine.upsertSecret).toHaveBeenCalledWith(
+      expect.stringMatching(/^sp_blob_/),
+      '{"ok":true}',
+      expect.anything(),
+    )
     const [, config] = (engine.createService as ReturnType<typeof vi.fn>).mock.calls[0]!
     const script = (config.cmd as string[])[2]!
-    expect(script.indexOf("rclone moveto")).toBeLessThan(script.indexOf("manifest.json"))
+    expect(script).toContain("rclone rcat")
+    expect(script).toContain("/run/secrets/blob")
+    expect(engine.removeSecret).toHaveBeenCalledWith(expect.stringMatching(/^sp_blob_/))
+  })
+
+  it("vérifie le checksum distant puis promeut en atomic-rename", async () => {
+    const engine = fakeEngine("HULLBAY_COMMIT_MODE atomic-rename")
+    const mode = await makeProvider(engine as unknown as DockerEngineService).commitPayload(
+      ".staging/run_1/payload.sql.gz",
+      "hullbay/shop/orders-db/bak_1/payload.sql.gz",
+      checksum,
+    )
+    expect(mode).toBe("atomic-rename")
+    const [, config] = (engine.createService as ReturnType<typeof vi.fn>).mock.calls[0]!
+    const script = (config.cmd as string[])[2]!
+    expect(script).toContain("rclone moveto")
     expect(script).toContain("hashsum sha256")
-    expect(config.secrets).toContainEqual({
-      secretName: "backup_manifest_run_1",
-      target: "/run/secrets/backup_manifest",
-    })
+    expect(script).toContain("HULLBAY_COMMIT_MODE")
+    const remoteSecret = (config.secrets as { secretName: string; target: string }[]).find(
+      (s) => s.target === "/run/secrets/backup_remote",
+    )
+    expect(remoteSecret?.secretName).toMatch(/^sp_remote_/)
     expect(engine.removeService).toHaveBeenCalled()
   })
 
@@ -243,20 +253,12 @@ describe("SwarmBackupRunner.commit", () => {
       { Status: { State: "failed" }, ContainerStatus: { ExitCode: 4 } },
     ])
     engine.serviceLogs.mockResolvedValue("checksum distant different")
-    const manifest = { runId: "run_1" } as BackupManifest
-
     await expect(
-      makeRunner(engine as unknown as DockerEngineService).commit({
-        produced: {
-          payloadKey: ".staging/run_1/payload.sql.gz",
-          payloadFileName: "payload.sql.gz",
-          checksumSha256: checksum,
-          sizeBytes: 42,
-        },
-        destination,
-        finalPrefix: "hullbay/shop/orders-db/bak_1",
-        manifest,
-      }),
+      makeProvider(engine as unknown as DockerEngineService).commitPayload(
+        ".staging/run_1/payload.sql.gz",
+        "hullbay/shop/orders-db/bak_1/payload.sql.gz",
+        checksum,
+      ),
     ).rejects.toMatchObject({ code: "checksum_mismatch" })
   })
 
@@ -264,20 +266,12 @@ describe("SwarmBackupRunner.commit", () => {
     const engine = fakeEngine()
     engine.listServiceTasks.mockResolvedValue([{ Status: { State: "failed" } }])
     engine.serviceLogs.mockResolvedValue("erreur inconnue")
-    const manifest = { runId: "run_1" } as BackupManifest
-
     await expect(
-      makeRunner(engine as unknown as DockerEngineService).commit({
-        produced: {
-          payloadKey: ".staging/run_1/payload.sql.gz",
-          payloadFileName: "payload.sql.gz",
-          checksumSha256: checksum,
-          sizeBytes: 42,
-        },
-        destination,
-        finalPrefix: "hullbay/shop/orders-db/bak_1",
-        manifest,
-      }),
+      makeProvider(engine as unknown as DockerEngineService).commitPayload(
+        ".staging/run_1/payload.sql.gz",
+        "hullbay/shop/orders-db/bak_1/payload.sql.gz",
+        checksum,
+      ),
     ).rejects.toMatchObject({ code: "commit_failed" })
   })
 })

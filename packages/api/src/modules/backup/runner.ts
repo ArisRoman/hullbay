@@ -1,27 +1,32 @@
-import type { BackupManifest, Placement, Resources } from "@hullbay/shared"
+import type { Placement, Resources } from "@hullbay/shared"
 import type { DockerEngineService } from "../docker-engine/service"
 import type { ArtifactProducer, ProducedArtifact } from "./engine/lifecycle"
 import { BackupError } from "./engine/lifecycle"
 import { SwarmTaskExecutor, type TaskSecret } from "./engine/swarm-task"
-import { buildRcloneRemoteString, scrubSecrets } from "./storage/remote-string"
+import { scrubSecrets } from "./storage/remote-string"
+import type { StagingSink } from "./storage/types"
 import type { ResolvedDestination } from "./storage/registry"
 import type { StrategyPlan, StrategyTarget } from "./strategies/types"
-import { CHECKSUM_FILE, MANIFEST_FILE } from "./manifest"
 
 /**
- * Exécuteur Swarm one-shot du Backup Engine.
+ * Producteur Swarm one-shot (extraction + staging put).
+ *
+ * Le runner ne connaît PAS rclone : la remote-string, le secret de transport et
+ * la commande d'upload lui sont fournis par le `StagingSink` (l'adapter de
+ * stockage). Il ne compose que `extraction | <commande d'upload>`.
  *
  * Contraintes (Direction + plan) :
  *  - jamais de `docker exec` : un service éphémère par étape, supprimé ensuite ;
  *  - credentials uniquement en Docker Secrets montés en fichiers ;
- *  - aucun volume d'archive : extraction → gzip → `rclone rcat` en streaming ;
- *  - le manifest est écrit en dernier (marqueur de commit).
+ *  - aucun volume d'archive : extraction → gzip → upload streamé.
  */
 
 const RESULT_MARKER = "HULLBAY_BACKUP_RESULT"
 
 export interface SwarmRunnerDeps {
   engine: DockerEngineService
+  /** Adapter de stockage : fournit la commande d'upload et les secrets. */
+  storage: StagingSink
   image: string
   networkName: string
   volumeName?: string
@@ -57,9 +62,11 @@ export class SwarmBackupRunner implements ArtifactProducer {
 
     try {
       const remoteSecret = secretName("backup_remote", ctx.runId)
-      await this.deps.engine.upsertSecret(remoteSecret, this.remoteFor(ctx.destination), {
-        "bozando.backupRunId": ctx.runId,
-      })
+      await this.deps.engine.upsertSecret(
+        remoteSecret,
+        this.deps.storage.remoteString(),
+        { "bozando.backupRunId": ctx.runId },
+      )
       created.push(remoteSecret)
 
       const secrets: TaskSecret[] = [
@@ -71,12 +78,19 @@ export class SwarmBackupRunner implements ArtifactProducer {
           target: "/run/secrets/db_password",
         })
       }
-      await this.mountKeySecret(ctx.runId, ctx.destination, secrets, created)
+      const transport = this.deps.storage.transportSecret()
+      if (transport) {
+        const keySecret = secretName("backup_key", ctx.runId)
+        await this.deps.engine.upsertSecret(keySecret, transport.material, {
+          "bozando.backupRunId": ctx.runId,
+        })
+        created.push(keySecret)
+        secrets.push({ secretName: keySecret, target: transport.target })
+      }
 
       const script = [
         "set -euo pipefail",
         'REMOTE="$(cat /run/secrets/backup_remote)"',
-        `trap 'rclone purge "$REMOTE/${ctx.stagingPrefix}" >/dev/null 2>&1 || true' ERR`,
         "mkdir -p /tmp/work",
         ctx.plan.prereqScript ?? "",
         "{",
@@ -84,7 +98,7 @@ export class SwarmBackupRunner implements ArtifactProducer {
         "} | tee \\",
         "  >(sha256sum | awk '{print $1}' > /tmp/work/checksum) \\",
         "  >(wc -c | tr -d ' ' > /tmp/work/size) \\",
-        `  | rclone rcat "$REMOTE/${payloadKey}"`,
+        `  | ${this.deps.storage.stagingUploadScript(payloadKey)}`,
         "wait",
         `printf '${RESULT_MARKER} %s %s\\n' "$(cat /tmp/work/size)" "$(cat /tmp/work/checksum)"`,
       ]
@@ -123,82 +137,12 @@ export class SwarmBackupRunner implements ArtifactProducer {
   }
 
   /**
-   * Le checksum est calculé pendant le transfert. La relecture distante a lieu
-   * dans le task de commit, avant toute promotion du payload.
+   * Le checksum est calculé pendant le transfert (tee). La vérification
+   * distante réelle et la promotion (commit) sont déléguées au StorageProvider
+   * par le lifecycle — le runner ne possède plus de lifecycle de stockage
+   * rclone caché (reviewer #2/#3/#4). Ici, seul le staging put fusionné avec
+   * l'extraction reste du ressort du producteur (contrainte de streaming).
    */
-  async verify(produced: ProducedArtifact) {
-    return {
-      sizeBytes: produced.sizeBytes,
-      checksumSha256: produced.checksumSha256,
-    }
-  }
-
-  async commit(ctx: {
-    produced: ProducedArtifact
-    destination: ResolvedDestination
-    finalPrefix: string
-    manifest: BackupManifest
-  }): Promise<void> {
-    const runId = ctx.manifest.runId
-    const remoteSecret = secretName("backup_remote", runId)
-    const manifestSecret = secretName("backup_manifest", runId)
-    const created: string[] = []
-
-    try {
-      await this.deps.engine.upsertSecret(
-        remoteSecret,
-        this.remoteFor(ctx.destination),
-        { "bozando.backupRunId": runId },
-      )
-      created.push(remoteSecret)
-      await this.deps.engine.upsertSecret(
-        manifestSecret,
-        JSON.stringify(ctx.manifest, null, 2),
-        { "bozando.backupRunId": runId },
-      )
-      created.push(manifestSecret)
-
-      const secrets: TaskSecret[] = [
-        { secretName: remoteSecret, target: "/run/secrets/backup_remote" },
-        { secretName: manifestSecret, target: "/run/secrets/backup_manifest" },
-      ]
-      await this.mountKeySecret(runId, ctx.destination, secrets, created)
-
-      const script = [
-        "set -euo pipefail",
-        'REMOTE="$(cat /run/secrets/backup_remote)"',
-        `SRC="$REMOTE/${ctx.produced.payloadKey}"`,
-        `DST="$REMOTE/${ctx.finalPrefix}/${ctx.produced.payloadFileName}"`,
-        `EXPECTED="${ctx.produced.checksumSha256}"`,
-        // Relecture distante avant promotion : un payload corrompu n'est jamais commité.
-        'HAVE="$(rclone hashsum sha256 "$SRC" 2>/dev/null | awk \'{print $1}\')" || HAVE=""',
-        'if [ -n "$HAVE" ] && [ "$HAVE" != "$EXPECTED" ]; then',
-        '  echo "checksum distant different" >&2',
-        "  exit 4",
-        "fi",
-        'rclone moveto "$SRC" "$DST"',
-        `printf '%s  %s\\n' "$EXPECTED" "${ctx.produced.payloadFileName}" | rclone rcat "$REMOTE/${ctx.finalPrefix}/${CHECKSUM_FILE}"`,
-        `rclone rcat "$REMOTE/${ctx.finalPrefix}/${MANIFEST_FILE}" < /run/secrets/backup_manifest`,
-      ].join("\n")
-
-      await this.tasks.run({
-        runId,
-        suffix: "commit",
-        script,
-        secrets,
-        networkName: this.deps.networkName,
-        image: this.deps.image,
-        placement: this.deps.placement,
-        resources: this.deps.resources,
-        timeoutSec: this.deps.timeoutSec,
-        pollMs: this.deps.pollMs,
-      })
-    } catch (error) {
-      throw this.classifyCommitFailure(error)
-    } finally {
-      await this.removeSecrets(created)
-    }
-  }
 
   // ── Interne ────────────────────────────────────────────────────────────────
 
@@ -225,65 +169,6 @@ export class SwarmBackupRunner implements ArtifactProducer {
     return new BackupError("transfer_failed", error.message, { logs })
   }
 
-  private classifyCommitFailure(error: unknown): unknown {
-    if (!(error instanceof BackupError) || error.code !== "task_failed") return error
-    const logs = scrubSecrets(error.logs ?? "")
-    if (error.exitCode === 4 || /checksum distant different/i.test(logs)) {
-      return new BackupError("checksum_mismatch", "checksum distant différent", { logs })
-    }
-    if (
-      /rclone|dial tcp|no such host|connection refused|i\/o timeout|context deadline exceeded/i.test(
-        logs,
-      )
-    ) {
-      return new BackupError("destination_unreachable", "destination de sauvegarde injoignable", {
-        logs,
-      })
-    }
-    return new BackupError("commit_failed", "commit de l'artifact échoué", { logs })
-  }
-
-  private remoteFor(destination: ResolvedDestination): string {
-    return buildRcloneRemoteString({
-      protocol: destination.protocol,
-      config: destination.config,
-      basePath: destination.basePath,
-      secretFiles: {
-        privateKey:
-          destination.config.protocol === "sftp" ? "/run/secrets/backup_key" : undefined,
-        serviceAccountJson:
-          destination.config.protocol === "gcs" ? "/run/secrets/backup_key" : undefined,
-      },
-    })
-  }
-
-  private async mountKeySecret(
-    runId: string,
-    destination: ResolvedDestination,
-    secrets: TaskSecret[],
-    created: string[],
-  ): Promise<void> {
-    const needsKey =
-      (destination.config.protocol === "sftp" && Boolean(destination.config.privateKey)) ||
-      destination.config.protocol === "gcs"
-    if (!needsKey) return
-
-    const keySecret = secretName("backup_key", runId)
-    let material: string
-    if (destination.config.protocol === "sftp") {
-      material = destination.config.privateKey!
-    } else if (destination.config.protocol === "gcs") {
-      material = destination.config.serviceAccountJson
-    } else {
-      return
-    }
-    await this.deps.engine.upsertSecret(keySecret, material, {
-      "bozando.backupRunId": runId,
-    })
-    created.push(keySecret)
-    secrets.push({ secretName: keySecret, target: "/run/secrets/backup_key" })
-  }
-
   private async removeSecrets(names: string[]): Promise<void> {
     for (const name of names) {
       await this.deps.engine.removeSecret(name).catch(() => undefined)
@@ -301,103 +186,5 @@ export class SwarmBackupRunner implements ArtifactProducer {
     const sizeBytes = Number.parseInt(size, 10)
     if (!Number.isFinite(sizeBytes) || !/^[0-9a-f]{64}$/i.test(checksum)) return null
     return { sizeBytes, checksumSha256: checksum.toLowerCase() }
-  }
-}
-
-/**
- * Probe de capacité d'une destination, exécutée dans un task one-shot.
- * Séquence : auth → write → stat → hash → move → delete (plan §9).
- */
-export async function probeDestination(input: {
-  engine: DockerEngineService
-  image: string
-  destination: ResolvedDestination
-  timeoutSec?: number
-}): Promise<{ ok: boolean; capabilities: Record<string, boolean>; logs: string }> {
-  const executor = new SwarmTaskExecutor(input.engine)
-  const runId = `probe${Date.now().toString(36)}`
-  const remoteSecret = secretName("backup_probe", runId)
-  const created: string[] = [remoteSecret]
-  const probeKey = `.probe/${runId}`
-  const script = [
-    "set -euo pipefail",
-    'REMOTE="$(cat /run/secrets/backup_remote)"',
-    "READ=false; WRITE=false; DELETE=false; CHECKSUM=false; MOVE=false",
-    'if rclone lsd "$REMOTE" >/dev/null 2>&1; then READ=true; fi',
-    `if printf 'probe' | rclone rcat "$REMOTE/${probeKey}" >/dev/null 2>&1; then WRITE=true; fi`,
-    'if [ "$WRITE" = true ]; then',
-    `  if rclone hashsum sha256 "$REMOTE/${probeKey}" 2>/dev/null | grep -Eq '^[0-9a-f]{64}'; then CHECKSUM=true; fi`,
-    `  if rclone moveto "$REMOTE/${probeKey}" "$REMOTE/${probeKey}.moved" >/dev/null 2>&1; then MOVE=true; fi`,
-    `  if rclone deletefile "$REMOTE/${probeKey}" >/dev/null 2>&1; then DELETE=true; fi`,
-    `  rclone deletefile "$REMOTE/${probeKey}.moved" >/dev/null 2>&1 || true`,
-    "fi",
-    'printf "HULLBAY_PROBE read=%s write=%s delete=%s checksum=%s move=%s\\n" "$READ" "$WRITE" "$DELETE" "$CHECKSUM" "$MOVE"',
-  ].join("\n")
-
-  try {
-    const needsKey =
-      (input.destination.config.protocol === "sftp" &&
-        Boolean(input.destination.config.privateKey)) ||
-      input.destination.config.protocol === "gcs"
-    const secrets: TaskSecret[] = [
-      { secretName: remoteSecret, target: "/run/secrets/backup_remote" },
-    ]
-    if (needsKey) {
-      const keySecret = secretName("backup_probe_key", runId)
-      const material =
-        input.destination.config.protocol === "sftp"
-          ? input.destination.config.privateKey!
-          : input.destination.config.protocol === "gcs"
-            ? input.destination.config.serviceAccountJson
-            : ""
-      await input.engine.upsertSecret(keySecret, material, {
-        "bozando.backupRunId": runId,
-      })
-      created.push(keySecret)
-      secrets.push({ secretName: keySecret, target: "/run/secrets/backup_key" })
-    }
-
-    await input.engine.upsertSecret(
-      remoteSecret,
-      buildRcloneRemoteString({
-        protocol: input.destination.protocol,
-        config: input.destination.config,
-        basePath: input.destination.basePath,
-        secretFiles: {
-          privateKey: needsKey ? "/run/secrets/backup_key" : undefined,
-          serviceAccountJson: needsKey ? "/run/secrets/backup_key" : undefined,
-        },
-      }),
-      { "bozando.backupRunId": runId },
-    )
-    const logs = await executor.run({
-      runId,
-      suffix: "probe",
-      script,
-      secrets,
-      image: input.image,
-      timeoutSec: input.timeoutSec ?? 60,
-    })
-    const line = logs.split(/\r?\n/).reverse().find((l) => l.includes("HULLBAY_PROBE"))
-    const caps = { read: false, write: false, delete: false, checksum: false, move: false }
-    if (line) {
-      for (const pair of line.trim().split(/\s+/).slice(1)) {
-        const [key, value] = pair.split("=")
-        if (key && key in caps) caps[key as keyof typeof caps] = value === "true"
-      }
-    }
-    return {
-      ok: caps.read && caps.write && caps.delete,
-      capabilities: {
-        ...caps,
-        atomicCommit: caps.move,
-        serverSideEncryption: false,
-      },
-      logs,
-    }
-  } finally {
-    for (const name of created) {
-      await input.engine.removeSecret(name).catch(() => undefined)
-    }
   }
 }

@@ -23,10 +23,7 @@ export interface ManifestTarget {
 export interface ManifestSource {
   engine: string
   engineVersion: string
-  host: string
-  port: number
   database?: string
-  username: string
 }
 
 export interface BuildManifestInput {
@@ -38,6 +35,8 @@ export interface BuildManifestInput {
   payload: { path: string; format: string; sizeBytes: number }
   checksumSha256: string
   encryptionMode: "none"
+  verificationMode: "size" | "checksum"
+  verificationDowngraded: boolean
   commitMode: "atomic-rename" | "copy-verify-delete"
   restore: { strategyId: string; command: string; requires?: Record<string, string> }
   createdAt?: Date
@@ -55,6 +54,7 @@ export function buildManifest(input: BuildManifestInput): BackupManifest {
     payload: input.payload,
     checksum: { algorithm: "sha256", value: input.checksumSha256 },
     encryption: { mode: input.encryptionMode },
+    verification: { mode: input.verificationMode, downgraded: input.verificationDowngraded },
     commit: { mode: input.commitMode },
     restore: {
       strategyId: input.restore.strategyId,

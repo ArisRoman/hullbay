@@ -98,12 +98,12 @@ const destination: ResolvedDestination = {
 }
 
 function makeProducer(
+  provider: LocalStorageProvider,
   payload: Buffer,
   options: { corruptChecksum?: boolean; failAfterWrite?: boolean } = {},
 ): ArtifactProducer {
   return {
-    async produce({ runId, artifactId, stagingPrefix, provider, onPhase }) {
-      if (!provider) throw new Error("provider requis dans ce test")
+    async produce({ stagingPrefix, onPhase }) {
       const payloadFileName = "payload.sql.gz"
       const payloadKey = `${stagingPrefix}/${payloadFileName}`
       await onPhase("transferring")
@@ -162,7 +162,7 @@ describe("BackupLifecycle", () => {
 
   it("commite un artifact complet et suit toutes les phases", async () => {
     const payload = Buffer.from("dump-content")
-    const result = await lifecycle().execute(input(makeProducer(payload)))
+    const result = await lifecycle().execute(input(makeProducer(provider, payload)))
 
     expect(result.ok).toBe(true)
     expect(store.artifacts).toHaveLength(1)
@@ -187,7 +187,7 @@ describe("BackupLifecycle", () => {
 
   it("ne crée aucun artifact si le transfert échoue", async () => {
     const result = await lifecycle().execute(
-      input(makeProducer(Buffer.from("x"), { failAfterWrite: true })),
+      input(makeProducer(provider, Buffer.from("x"), { failAfterWrite: true })),
     )
 
     expect(result.ok).toBe(false)
@@ -198,7 +198,7 @@ describe("BackupLifecycle", () => {
 
   it("refuse le commit quand le checksum distant diffère", async () => {
     const result = await lifecycle().execute(
-      input(makeProducer(Buffer.from("payload"), { corruptChecksum: true })),
+      input(makeProducer(provider, Buffer.from("payload"), { corruptChecksum: true })),
     )
 
     expect(result.ok).toBe(false)
@@ -210,7 +210,7 @@ describe("BackupLifecycle", () => {
   it("refuse le commit quand la taille distante diffère", async () => {
     const producer: ArtifactProducer = {
       async produce(ctx) {
-        const produced = await makeProducer(Buffer.from("12345")).produce(ctx)
+        const produced = await makeProducer(provider, Buffer.from("12345")).produce(ctx)
         return { ...produced, sizeBytes: 999 }
       },
     }
@@ -231,10 +231,11 @@ describe("BackupLifecycle", () => {
       delete: (key) => provider.delete(key),
       move: async () => false,
       hash: (key, algorithm) => provider.hash(key, algorithm),
+      commitPayload: (s, f, e) => provider.commitPayload(s, f, e),
     }
 
     const result = await lifecycle().execute(
-      input(makeProducer(Buffer.from("payload")), { provider: noMove }),
+      input(makeProducer(provider, Buffer.from("payload")), { provider: noMove }),
     )
     expect(result.ok).toBe(true)
     expect(store.artifacts).toHaveLength(1)
@@ -255,19 +256,66 @@ describe("BackupLifecycle", () => {
       delete: (key) => provider.delete(key),
       move: (from, to) => provider.move(from, to),
       hash: (key, algorithm) => provider.hash(key, algorithm),
+      commitPayload: (s, f, e) => provider.commitPayload(s, f, e),
     }
 
     const result = await lifecycle().execute(
-      input(makeProducer(Buffer.from("payload")), { provider: failingManifest }),
+      input(makeProducer(provider, Buffer.from("payload")), { provider: failingManifest }),
     )
     expect(result.ok).toBe(false)
     expect(store.artifacts).toHaveLength(0)
     expect(store.runs[0]!.status).toBe("FAILED")
   })
 
+  it("consigne copy-verify-delete quand le backend ne supporte pas le rename (#4)", async () => {
+    const noMove: StorageProvider = {
+      id: "no-move",
+      capabilities: () => provider.capabilities(),
+      put: (key, data, opts) => provider.put(key, data, opts),
+      get: (key) => provider.get(key),
+      stat: (key) => provider.stat(key),
+      list: (prefix) => provider.list(prefix),
+      delete: (key) => provider.delete(key),
+      move: async () => false,
+      hash: (key, algorithm) => provider.hash(key, algorithm),
+      commitPayload: async () => "copy-verify-delete" as const,
+    }
+
+    const result = await lifecycle().execute(
+      input(makeProducer(provider, Buffer.from("payload")), { provider: noMove }),
+    )
+    expect(result.ok).toBe(true)
+    // Le mode réellement exécuté (copy-verify-delete) est enregistré, pas deviné.
+    expect(store.artifacts[0]!.manifest.commit.mode).toBe("copy-verify-delete")
+    expect(store.artifacts[0]!.manifest.verification.downgraded).toBe(false)
+  })
+
+  it("consigne le downgrade de vérif quand le backend n'a pas de hash natif (#3)", async () => {
+    const noHash: StorageProvider = {
+      id: "no-hash",
+      capabilities: () => provider.capabilities(),
+      put: (key, data, opts) => provider.put(key, data, opts),
+      get: (key) => provider.get(key),
+      stat: (key) => provider.stat(key),
+      list: (prefix) => provider.list(prefix),
+      delete: (key) => provider.delete(key),
+      move: (from, to) => provider.move(from, to),
+      hash: async () => null,
+      commitPayload: async () => "atomic-rename" as const,
+    }
+
+    const result = await lifecycle().execute(
+      input(makeProducer(provider, Buffer.from("payload"), ), { provider: noHash }),
+    )
+    expect(result.ok).toBe(true)
+    // Vérification rétrogradée en taille, explicitement consignée.
+    expect(store.artifacts[0]!.manifest.verification.mode).toBe("size")
+    expect(store.artifacts[0]!.manifest.verification.downgraded).toBe(true)
+  })
+
   it("refuse avant transfert si les prérequis échouent", async () => {
     const badVersion = { ...target, engineVersion: "pas-une-version" }
-    const result = await lifecycle().execute(input(makeProducer(Buffer.from("x")), { target: badVersion }))
+    const result = await lifecycle().execute(input(makeProducer(provider, Buffer.from("x")), { target: badVersion }))
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errorCode).toBe("prereq_failed")
     expect(store.artifacts).toHaveLength(0)

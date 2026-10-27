@@ -8,7 +8,10 @@ import { getStrategy } from "./strategies/registry"
 import { BackupLifecycle } from "./engine/lifecycle"
 import { prismaRunStore } from "./engine/run-store"
 import { acquireLease, releaseLease } from "./engine/lease"
-import { SwarmBackupRunner, probeDestination } from "./runner"
+import { backupSemaphore } from "./engine/concurrency"
+import { SwarmBackupRunner } from "./runner"
+import { SwarmStorageProvider } from "./storage/swarm-provider"
+import { probeDestination } from "./storage/swarm-probe"
 
 /**
  * Policies de sauvegarde : intention (cible + destination + planification).
@@ -125,7 +128,7 @@ export class BackupPolicyService {
     await prisma.backupPolicy.delete({ where: { id } })
   }
 
-  /** Run manuel : orchestration complète (résolution → task → commit). */
+  /** Run manuel : acquiert le lease puis exécute (résolution → task → commit). */
   async runNow(id: string, tenantId: string) {
     // Lease d'exécution : empêche un run manuel concurrent avec le scheduler
     // (ou un autre run manuel) sur la même policy. Miroir de backup-scheduler.
@@ -134,9 +137,24 @@ export class BackupPolicyService {
       throw new Error("sauvegarde déjà en cours pour cette policy")
     }
     try {
-      return await this.runLocked(id, tenantId)
+      return await this.runScheduled(id, tenantId)
     } finally {
       await releaseLease(id, owner)
+    }
+  }
+
+  /**
+   * Exécution planifiée : le scheduler détient DÉJÀ le lease de la policy
+   * (acquis avec son propre owner). On n'en ré-acquiert donc pas un second,
+   * sinon le run échouerait systématiquement. On borne seulement la charge
+   * locale via le sémaphore (reviewer #16).
+   */
+  async runScheduled(id: string, tenantId: string) {
+    await backupSemaphore.acquire()
+    try {
+      return await this.runLocked(id, tenantId)
+    } finally {
+      backupSemaphore.release()
     }
   }
 
@@ -156,13 +174,35 @@ export class BackupPolicyService {
     const placement = (policy.placementJson ?? undefined) as
       | { constraints: string[]; spreadOver: string[] }
       | undefined
+    // Limites de ressources explicites (#16) : un backup peut être très coûteux
+    // (CPU/RAM/IO). Plafond défensif par défaut ; une surcharge par policy
+    // pourra être persistée ultérieurement via `resourcesJson`.
+    const resources: { cpus: number; memMb: number } = { cpus: 1, memMb: 1024 }
+
+    // StorageProvider = frontière de stockage réelle (reviewer #2) : le moteur
+    // ne connaît que ce contrat ; rclone est l'adapter Swarm sous-jacent. Le
+    // producteur reçoit ce même adapter comme `StagingSink` : il ne hardcode
+    // donc plus aucune commande rclone (upload, remote-string, secrets).
+    const storage = new SwarmStorageProvider(
+      {
+        engine,
+        image: RUNNER_IMAGE,
+        networkName: resolvedTarget.networkName,
+        placement,
+        resources,
+        timeoutSec: policy.timeoutSec,
+      },
+      destination,
+    )
 
     const runner = new SwarmBackupRunner({
       engine,
+      storage,
       image: RUNNER_IMAGE,
       networkName: resolvedTarget.networkName,
       volumeName: resolvedTarget.volumeName,
       placement,
+      resources,
       timeoutSec: policy.timeoutSec,
     })
 
@@ -177,6 +217,7 @@ export class BackupPolicyService {
       target: resolvedTarget.target,
       destination,
       producer: runner,
+      provider: storage,
       verification: policy.verification === "size" ? "size" : "checksum",
     })
   }

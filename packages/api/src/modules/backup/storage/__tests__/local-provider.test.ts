@@ -105,6 +105,7 @@ describe("probeStorage", () => {
       delete: (key) => local.delete(key),
       move: (from, to) => local.move(from, to),
       hash: (key) => local.hash(key),
+      commitPayload: (s, f, e) => local.commitPayload(s, f, e),
     }
 
     const result = await probeStorage(readOnly)
@@ -131,6 +132,7 @@ describe("probeStorage", () => {
       delete: async () => undefined,
       move: async () => false,
       hash: async () => null,
+      commitPayload: async () => "atomic-rename",
     }
 
     const result = await probeStorage(unreachable)
@@ -151,6 +153,7 @@ describe("probeStorage", () => {
       delete: (key) => local.delete(key),
       move: (from, to) => local.move(from, to),
       hash: async () => null,
+      commitPayload: (s, f, e) => local.commitPayload(s, f, e),
     }
 
     const result = await probeStorage(noHash)

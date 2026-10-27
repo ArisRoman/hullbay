@@ -56,6 +56,14 @@ export type BackupSchedule = z.infer<typeof BackupScheduleSchema>
 export const BackupVerificationSchema = z.enum(["size", "checksum"])
 export type BackupVerification = z.infer<typeof BackupVerificationSchema>
 
+/**
+ * Chiffrement du PAYLOAD de l'artifact (reviewer #12).
+ *
+ * À ne pas confondre avec le chiffrement des CREDENTIALS de destination, qui est
+ * un mécanisme distinct (secrets chiffrés au repos côté API). Les deux concepts
+ * sont volontairement séparés : le chiffrement des données de sauvegarde est sa
+ * propre politique, future (« age »/« gpg »), indépendante des credentials.
+ */
 export const BackupEncryptionModeSchema = z.enum(["none"])
 export type BackupEncryptionMode = z.infer<typeof BackupEncryptionModeSchema>
 
@@ -312,14 +320,18 @@ export const BackupManifestTargetSchema = z
   })
   .strict()
 
+/**
+ * Identité de la source, SANS détails d'infrastructure réseau.
+ *
+ * Un artifact exporté ne doit pas exposer host/port/username (reviewer #14) :
+ * il décrit CE QUI a été sauvegardé (moteur, version, nom de base) et non
+ * COMMENT s'y connecter. Les credentials et la topologie restent côté Hullbay.
+ */
 export const BackupManifestSourceSchema = z
   .object({
     engine: nonEmpty,
     engineVersion: nonEmpty,
-    host: nonEmpty,
-    port: port,
     database: optionalNonEmpty,
-    username: nonEmpty,
   })
   .strict()
 
@@ -355,6 +367,21 @@ export const BackupManifestRestoreSchema = z
   })
   .strict()
 
+/**
+ * Vérification réellement appliquée à l'artifact.
+ *
+ * `mode` = ce qui a été exigé par la policy ; `downgraded` = vrai quand le
+ * backend de stockage ne supporte pas le hash natif et que la vérification a
+ * été rétrogradée vers le contrôle de taille (jamais silencieuse : ce drapeau
+ * est consigné dans l'artifact et visible au restore).
+ */
+export const BackupManifestVerificationSchema = z
+  .object({
+    mode: BackupVerificationSchema,
+    downgraded: z.boolean().default(false),
+  })
+  .strict()
+
 export const BackupManifestSchema = z
   .object({
     formatVersion: z.number().int().min(1),
@@ -367,6 +394,7 @@ export const BackupManifestSchema = z
     payload: BackupManifestPayloadSchema,
     checksum: BackupManifestChecksumSchema,
     encryption: z.object({ mode: BackupEncryptionModeSchema }).strict(),
+    verification: BackupManifestVerificationSchema,
     commit: z
       .object({ mode: z.enum(["atomic-rename", "copy-verify-delete"]) })
       .strict(),

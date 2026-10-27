@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { BackupManifest, BackupRunPhase } from "@hullbay/shared"
 import { scrubSecrets } from "../storage/remote-string"
-import type { StorageProvider } from "../storage/types"
+import { StorageProviderError, type StorageProvider } from "../storage/types"
 import type { ResolvedDestination } from "../storage/registry"
 import { artifactPrefix, buildManifest, CHECKSUM_FILE, MANIFEST_FILE } from "../manifest"
 import type { BackupStrategy, StrategyPlan, StrategyTarget } from "../strategies/types"
@@ -26,33 +26,23 @@ export interface ProducedArtifact {
 
 export interface ArtifactProducer {
   /**
-   * Vérification côté exécutant (le task Swarm n'a pas de provider in-process).
-   * Retourne les mesures relues après transfert.
+   * Extraction + staging put (fusionnés par streaming dans un task Swarm).
+   * La vérification distante et la promotion (commit) sont déléguées au
+   * StorageProvider par le lifecycle — le producteur ne possède pas de
+   * lifecycle de stockage (reviewer #2/#3/#4).
    */
-  verify?(produced: ProducedArtifact): Promise<{
-    sizeBytes: number
-    checksumSha256: string
-  }>
-  /** Commit distant : staging → clé finale, manifest écrit en dernier. */
-  commit?(ctx: {
-    produced: ProducedArtifact
-    destination: ResolvedDestination
-    finalPrefix: string
-    manifest: BackupManifest
-  }): Promise<void>
-  /** Nettoyage du staging après échec. */
-  cleanup?(stagingPrefix: string): Promise<void>
   produce(ctx: {
     runId: string
     artifactId: string
     /** Préfixe de staging imposé par le moteur (nettoyé dans tous les cas). */
     stagingPrefix: string
     destination: ResolvedDestination
-    provider?: StorageProvider
     target: StrategyTarget
     plan: StrategyPlan
     onPhase: (phase: BackupRunPhase) => Promise<void>
   }): Promise<ProducedArtifact>
+  /** Nettoyage du staging après échec (délégué au StorageProvider sinon). */
+  cleanup?(stagingPrefix: string): Promise<void>
 }
 
 export interface RunStore {
@@ -111,28 +101,6 @@ export class BackupError extends Error {
   }
 }
 
-/** Déplace un objet ; dégrade en copy+verify+delete si le backend l'exige. */
-export async function moveOrCopy(
-  provider: StorageProvider,
-  from: string,
-  to: string,
-  expectedChecksum?: string,
-): Promise<"atomic-rename" | "copy-verify-delete"> {
-  if (await provider.move(from, to)) return "atomic-rename"
-
-  const sourceHash = expectedChecksum ?? (await provider.hash(from))
-  await provider.put(to, await provider.get(from))
-  if (sourceHash) {
-    const copied = await provider.hash(to)
-    if (copied !== sourceHash) {
-      await provider.delete(to).catch(() => undefined)
-      throw new BackupError("commit_failed", "copie distante non vérifiée")
-    }
-  }
-  await provider.delete(from)
-  return "copy-verify-delete"
-}
-
 async function cleanupStaging(
   provider: StorageProvider,
   prefix: string,
@@ -182,48 +150,39 @@ export class BackupLifecycle {
         artifactId,
         stagingPrefix,
         destination: input.destination,
-        provider: input.provider,
         target: input.target,
         plan,
         onPhase,
       })
 
       await onPhase("verifying")
-      if (input.producer.verify) {
-        const evidence = await input.producer.verify(produced)
-        if (evidence.sizeBytes !== produced.sizeBytes) {
-          throw new BackupError(
-            "verify_failed",
-            `taille relue ${evidence.sizeBytes} ≠ ${produced.sizeBytes}`,
-          )
+      // Vérification RÉELLE et distante via le StorageProvider : jamais un
+      // simple local == local (reviewer #3). La taille est toujours vérifiée ;
+      // le checksum l'est quand le backend le supporte. Tout downgrade est
+      // consigné explicitement dans le manifest (jamais silencieux).
+      if (!input.provider) {
+        throw new BackupError("verify_failed", "aucun storage provider disponible")
+      }
+      let verificationMode = input.verification
+      let verificationDowngraded = false
+      const stat = await input.provider.stat(produced.payloadKey)
+      if (!stat) throw new BackupError("verify_failed", "payload absent du stockage")
+      if (stat.size !== produced.sizeBytes) {
+        throw new BackupError(
+          "verify_failed",
+          `taille distante ${stat.size} ≠ ${produced.sizeBytes}`,
+        )
+      }
+      const remoteHash = await input.provider.hash(produced.payloadKey)
+      if (input.verification === "checksum") {
+        if (remoteHash && remoteHash !== produced.checksumSha256) {
+          throw new BackupError("checksum_mismatch", "checksum distant différent")
         }
-        if (
-          input.verification === "checksum" &&
-          evidence.checksumSha256 !== produced.checksumSha256
-        ) {
-          throw new BackupError("checksum_mismatch", "checksum relu différent")
-        }
-      } else {
-        if (!input.provider) {
-          throw new BackupError("verify_failed", "aucun vérificateur disponible")
-        }
-        const stat = await input.provider.stat(produced.payloadKey)
-        if (!stat) {
-          throw new BackupError("verify_failed", "payload absent du stockage")
-        }
-        if (stat.size !== produced.sizeBytes) {
-          throw new BackupError(
-            "verify_failed",
-            `taille distante ${stat.size} ≠ ${produced.sizeBytes}`,
-          )
-        }
-        if (input.verification === "checksum") {
-          const remoteHash = await input.provider.hash(produced.payloadKey)
-          // Backend sans hash natif : la vérification retombe sur la taille,
-          // information consignée dans le run (jamais silencieuse côté code).
-          if (remoteHash && remoteHash !== produced.checksumSha256) {
-            throw new BackupError("checksum_mismatch", "checksum distant différent")
-          }
+        // Backend sans hash natif : on rétrograde vers la vérification de
+        // taille (déjà effectuée ci-dessus). Le downgrade est EXPLICITE.
+        if (!remoteHash) {
+          verificationDowngraded = true
+          verificationMode = "size"
         }
       }
 
@@ -234,6 +193,17 @@ export class BackupLifecycle {
         input.target.name,
         artifactId,
       )
+      const finalKey = `${finalPrefix}/${produced.payloadFileName}`
+
+      // Promotion via le StorageProvider : c'est lui qui choisit et exécute le
+      // mécanisme (atomic-rename vs copy-verify-delete) selon SES capacités, et
+      // renvoie le mode RÉELLEMENT utilisé — consigné tel quel (reviewer #4).
+      const commitMode = await input.provider.commitPayload(
+        produced.payloadKey,
+        finalKey,
+        produced.checksumSha256,
+      )
+
       const manifest = buildManifest({
         artifactId,
         runId: run.id,
@@ -245,10 +215,7 @@ export class BackupLifecycle {
         source: {
           engine: input.target.engine,
           engineVersion: input.target.engineVersion,
-          host: input.target.host,
-          port: input.target.port,
           database: input.target.database,
-          username: input.target.username,
         },
         strategy: {
           id: input.strategy.id,
@@ -263,10 +230,9 @@ export class BackupLifecycle {
         },
         checksumSha256: produced.checksumSha256,
         encryptionMode: "none",
-        commitMode:
-          input.provider && !input.provider.capabilities().atomicCommit
-            ? "copy-verify-delete"
-            : "atomic-rename",
+        verificationMode,
+        verificationDowngraded,
+        commitMode,
         restore: {
           strategyId: input.strategy.id,
           command: plan.restoreCommand,
@@ -274,36 +240,15 @@ export class BackupLifecycle {
         },
       })
 
-      if (input.producer.commit) {
-        await input.producer.commit({
-          produced,
-          destination: input.destination,
-          finalPrefix,
-          manifest,
-        })
-      } else {
-        if (!input.provider) {
-          throw new BackupError("commit_failed", "aucun writer disponible")
-        }
-        await moveOrCopy(
-          input.provider,
-          produced.payloadKey,
-          `${finalPrefix}/${produced.payloadFileName}`,
-          produced.checksumSha256,
-        )
-        await input.provider.put(
-          `${finalPrefix}/${CHECKSUM_FILE}`,
-          Buffer.from(
-            `${produced.checksumSha256}  ${produced.payloadFileName}\n`,
-            "utf8",
-          ),
-        )
-        // Le manifest est écrit EN DERNIER : sa présence vaut commit.
-        await input.provider.put(
-          `${finalPrefix}/${MANIFEST_FILE}`,
-          Buffer.from(JSON.stringify(manifest, null, 2), "utf8"),
-        )
-      }
+      // Le manifest est écrit EN DERNIER : sa présence vaut commit.
+      await input.provider.put(
+        `${finalPrefix}/${CHECKSUM_FILE}`,
+        Buffer.from(`${produced.checksumSha256}  ${produced.payloadFileName}\n`, "utf8"),
+      )
+      await input.provider.put(
+        `${finalPrefix}/${MANIFEST_FILE}`,
+        Buffer.from(JSON.stringify(manifest, null, 2), "utf8"),
+      )
 
       const artifact = await this.store.createArtifact({
         runId: run.id,
@@ -333,9 +278,11 @@ export class BackupLifecycle {
       const code =
         error instanceof BackupError
           ? error.code
-          : state.phase === "verifying"
-            ? "verify_failed"
-            : "backup_failed"
+          : error instanceof StorageProviderError
+            ? error.code
+            : state.phase === "verifying"
+              ? "verify_failed"
+              : "backup_failed"
       const message = scrubSecrets(
         error instanceof Error ? error.message : String(error),
       )

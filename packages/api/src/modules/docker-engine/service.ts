@@ -223,6 +223,16 @@ export class DockerEngineService {
     return this.docker.listServices({ filters: managedFilter() });
   }
 
+  /** Services éphémères du Backup Engine (label `bozando.backup=true`). */
+  async listBackupServices() {
+    return (await this.docker.listServices({
+      filters: { label: ["bozando.backup=true"] },
+    })) as {
+      ID?: string;
+      Spec?: { Name?: string; Labels?: Record<string, string> };
+    }[];
+  }
+
   /** Services gérés d'un projet donné. */
   async listProjectServices(projectId: string) {
     return this.docker.listServices({ filters: projectFilter(projectId) });
@@ -548,6 +558,21 @@ export class DockerEngineService {
   async listManagedSecrets() {
     const list = (await this.docker.listSecrets({
       filters: managedFilter(),
+    })) as {
+      ID?: string;
+      Spec?: { Name?: string; Labels?: Record<string, string> };
+    }[];
+    return list.map((s) => ({
+      id: s.ID ?? "",
+      name: s.Spec?.Name ?? "",
+      labels: s.Spec?.Labels ?? {},
+    }));
+  }
+
+  /** Secrets éphémères du Backup Engine (label `bozando.backupRunId`). */
+  async listBackupSecrets() {
+    const list = (await this.docker.listSecrets({
+      filters: { label: ["bozando.backupRunId"] },
     })) as {
       ID?: string;
       Spec?: { Name?: string; Labels?: Record<string, string> };

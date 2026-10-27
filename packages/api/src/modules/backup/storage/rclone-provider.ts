@@ -8,7 +8,10 @@ import type {
   StorageCapabilities,
   StorageProvider,
 } from "./types"
+import { StorageProviderError } from "./types"
 import { scrubSecrets } from "./remote-string"
+
+export { StorageProviderError }
 
 /**
  * Implémentation `StorageProvider` au-dessus du binaire rclone.
@@ -18,16 +21,6 @@ import { scrubSecrets } from "./remote-string"
  * credentials) et n'apparaît jamais dans un message d'erreur : toute sortie est
  * passée par `scrubSecrets`.
  */
-
-export class StorageProviderError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-  ) {
-    super(message)
-    this.name = "StorageProviderError"
-  }
-}
 
 interface RunResult {
   stdout: string
@@ -218,5 +211,30 @@ export class RcloneStorageProvider implements StorageProvider {
     if (result.code !== 0) return null
     const value = result.stdout.trim().split(/\s+/)[0] ?? ""
     return /^[0-9a-f]{64}$/i.test(value) ? value.toLowerCase() : null
+  }
+
+  async commitPayload(
+    stagingKey: string,
+    finalKey: string,
+    expectedChecksum: string,
+  ): Promise<"atomic-rename" | "copy-verify-delete"> {
+    // Vérification distante avant promotion : un payload corrompu n'est
+    // jamais promu en artifact valide.
+    const remoteHash = await this.hash(stagingKey)
+    if (remoteHash && remoteHash !== expectedChecksum) {
+      throw new StorageProviderError("checksum distant différent", "checksum_mismatch")
+    }
+    if (await this.move(stagingKey, finalKey)) return "atomic-rename"
+
+    // Backend sans rename natif : copy → verify → delete.
+    const data = await this.get(stagingKey)
+    await this.put(finalKey, data)
+    const copied = await this.hash(finalKey)
+    if (copied && copied !== expectedChecksum) {
+      await this.delete(finalKey).catch(() => undefined)
+      throw new StorageProviderError("copie distante non vérifiée", "commit_failed")
+    }
+    await this.delete(stagingKey)
+    return "copy-verify-delete"
   }
 }

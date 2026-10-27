@@ -13,15 +13,14 @@ const input = {
   source: {
     engine: "postgres",
     engineVersion: "16",
-    host: "boz_shop_db",
-    port: 5432,
     database: "orders",
-    username: "app",
   },
   strategy: { id: "postgres.pg_dump", version: 1, tool: "pg_dump", toolVersion: "16.4" },
   payload: { path: "payload.sql.gz", format: "sql.gz", sizeBytes: 10 },
   checksumSha256: "b".repeat(64),
   encryptionMode: "none" as const,
+  verificationMode: "checksum" as const,
+  verificationDowngraded: false,
   commitMode: "atomic-rename" as const,
   restore: { strategyId: "postgres.pg_dump", command: "gunzip -c payload.sql.gz | psql" },
   createdAt: new Date("2026-10-25T10:00:00Z"),
@@ -34,6 +33,27 @@ describe("buildManifest", () => {
     expect(manifest.createdAt).toBe("2026-10-25T10:00:00.000Z")
     expect(manifest.checksum).toEqual({ algorithm: "sha256", value: "b".repeat(64) })
     expect(parseBackupManifest(manifest)).toEqual(manifest)
+  })
+
+  it("n'expose aucune info réseau/credential de la source (#14)", () => {
+    const manifest = buildManifest(input)
+    expect(manifest.source).toEqual({
+      engine: "postgres",
+      engineVersion: "16",
+      database: "orders",
+    })
+    expect(manifest.source).not.toHaveProperty("host")
+    expect(manifest.source).not.toHaveProperty("port")
+    expect(manifest.source).not.toHaveProperty("username")
+  })
+
+  it("consigne le mode de vérif et le downgrade (#3)", () => {
+    const manifest = buildManifest({
+      ...input,
+      verificationMode: "size",
+      verificationDowngraded: true,
+    })
+    expect(manifest.verification).toEqual({ mode: "size", downgraded: true })
   })
 
   it("refuse un checksum non hexadécimal", () => {

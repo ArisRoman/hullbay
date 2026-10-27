@@ -148,4 +148,26 @@ export class LocalStorageProvider implements StorageProvider {
     }
     return digest.digest("hex")
   }
+
+  async commitPayload(
+    stagingKey: string,
+    finalKey: string,
+    expectedChecksum: string,
+  ): Promise<"atomic-rename" | "copy-verify-delete"> {
+    const remoteHash = await this.hash(stagingKey)
+    if (remoteHash && remoteHash !== expectedChecksum) {
+      throw new Error("checksum distant différent")
+    }
+    if (await this.move(stagingKey, finalKey)) return "atomic-rename"
+    // Fallback (jamais atteint en local, mais conforme au contrat).
+    const data = await this.get(stagingKey)
+    await this.put(finalKey, data)
+    const copied = await this.hash(finalKey)
+    if (copied && copied !== expectedChecksum) {
+      await this.delete(finalKey).catch(() => undefined)
+      throw new Error("copie non vérifiée")
+    }
+    await this.delete(stagingKey)
+    return "copy-verify-delete"
+  }
 }

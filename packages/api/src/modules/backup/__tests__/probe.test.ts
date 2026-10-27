@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { DockerEngineService } from "../../docker-engine/service"
-import { probeDestination } from "../runner"
+import { probeDestination } from "../storage/swarm-probe"
 import type { ResolvedDestination } from "../storage/registry"
 
 function fakeEngine(logs: string) {

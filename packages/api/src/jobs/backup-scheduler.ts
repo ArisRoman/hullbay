@@ -5,6 +5,7 @@ import { backupDestinationService } from "../modules/backup/destinations.service
 import { backupTargetService } from "../modules/backup/targets.service"
 import { runRetention } from "../modules/backup/retention"
 import { acquireLease, releaseLease } from "../modules/backup/engine/lease"
+import { sweepAllOrphanBackupResources } from "../modules/backup/engine/orphan-sweep"
 import { DockerEngineService } from "../modules/docker-engine/service"
 
 /**
@@ -87,7 +88,10 @@ export async function runSchedulerTick(now = new Date()): Promise<{
     }
 
     try {
-      const result = await backupPolicyService.runNow(policy.id, tenantId)
+      // Le scheduler détient déjà le lease (OWNER) : ne pas en ré-acquérir un
+      // second dans runNow (ce qui échouerait toujours). `runScheduled` exécute
+      // sous ce lease et ne fait que borner la concurrence locale.
+      const result = await backupPolicyService.runScheduled(policy.id, tenantId)
       if (!result.ok) {
         failed += 1
         continue
@@ -157,7 +161,11 @@ let timer: NodeJS.Timeout | undefined
 
 export function startBackupScheduler(intervalMs = 60_000): void {
   if (timer) return
-  void sweepStaleRuns().catch(() => undefined)
+  // Marque les runs interrompus comme FAILED, PUIS purge les services/secrets
+  // orphelins (crash API) — reviewer #16.
+  void sweepStaleRuns()
+    .then(() => sweepAllOrphanBackupResources())
+    .catch(() => undefined)
   timer = setInterval(() => {
     void runSchedulerTick().catch((error) => {
       console.error("[backup] tick échoué:", error)
