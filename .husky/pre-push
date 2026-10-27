@@ -1,0 +1,4 @@
+npm run build --workspace @hullbay/shared &&
+npx prisma generate --schema packages/api/prisma/schema.prisma &&
+npm run typecheck &&
+npm run test --workspace @hullbay/api

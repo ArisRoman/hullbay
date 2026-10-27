@@ -10,7 +10,9 @@
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "release": "semantic-release"
+    "release": "semantic-release",
+    "prepare": "husky",
+    "test": "npm run test --workspaces --if-present"
   },
   "overrides": {
     "browserslist": "4.28.0"
@@ -31,6 +33,7 @@
     "@semantic-release/github": "^12.0.9",
     "@semantic-release/npm": "^13.1.5",
     "@semantic-release/release-notes-generator": "^14.1.1",
+    "husky": "^9.1.7",
     "semantic-release": "^25.0.8"
   }
 }

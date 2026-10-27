@@ -44,6 +44,9 @@ yarn-error.log*
 .vscode/
 *.swp
 
+# Husky generated hooks (recréés par npm run prepare)
+.husky/_
+
 # Caddy runtime data
 caddy_data/
 caddy_config/
